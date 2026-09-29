@@ -16,7 +16,18 @@ namespace CantResell
         [SerializeField] private AuctionUIComponent uiComponent; //메뉴와 게임 화면 담당
         [SerializeField] private AuctionItemViewComponent viewComponent; //테이블과 상품 시연 담당
         [SerializeField] private AuctionVoiceComponent voiceComponent; //방 음성 및 마이크 담당
+        [SerializeField] private AuctionSettingsComponent settingsComponent; //음량과 화면 설정 저장 담당
+        [SerializeField] private AuctionAudioComponent audioComponent; //음악과 효과음 재생 담당
         public AuctionVoiceComponent voice => voiceComponent; //UI에 제공할 음성 상태
+        public float masterVolume => settingsComponent.masterVolume; //설정창의 전체 음량
+        public float musicVolume => settingsComponent.musicVolume; //설정창의 음악 음량
+        public float effectsVolume => settingsComponent.effectsVolume; //설정창의 효과음 음량
+        public Vector2Int[] resolutions => settingsComponent.resolutions; //선택 가능한 화면 크기
+        public Vector2Int selectedResolution => settingsComponent.selectedResolution; //적용한 화면 크기
+        public bool fullscreen => settingsComponent.fullscreen; //전체 화면 설정
+        public bool displayPending => settingsComponent.displayPending; //해상도 확인 대기 여부
+        public int displaySeconds => settingsComponent.displaySeconds; //해상도 원복까지 남은 초
+        public string displayMessage => settingsComponent.displayMessage; //화면 설정 결과 안내
         private static AuctionGame instance; //씬 사이에 유지할 진입점
         private readonly AuctionState.Player[] players = new AuctionState.Player[4]; //호스트의 참가자 정보
         private readonly bool[] loaded = new bool[4]; //참가자의 게임 씬 준비 여부
@@ -49,7 +60,7 @@ namespace CantResell
             }
             instance = this;
             if (roundComponent == null || itemComponent == null || bidComponent == null || economyComponent == null ||
-                networkComponent == null || uiComponent == null || viewComponent == null || voiceComponent == null)
+                networkComponent == null || uiComponent == null || viewComponent == null || voiceComponent == null || settingsComponent == null || audioComponent == null)
             {
                 Debug.LogError("AuctionGame의 Component 참조를 모두 연결해 주세요.", this);
                 enabled = false;
@@ -59,6 +70,9 @@ namespace CantResell
             Application.runInBackground = true;
             roundComponent.resetLobby();
             economyComponent.resetMatch();
+            settingsComponent.initialize(restoreDisplay: !Application.isBatchMode);
+            audioComponent.applyVolumes(masterVolume, musicVolume, effectsVolume);
+            audioComponent.initialize();
             networkComponent.initialize(this);
             uiComponent.initialize(this);
             SceneManager.sceneLoaded += onSceneLoaded;
@@ -211,6 +225,57 @@ namespace CantResell
         public void prepareVoice(Fusion.NetworkRunner runner) //입장할 방의 음성 구성 연결
         {
             voiceComponent.attach(runner);
+        }
+
+        public void setVolume(AuctionSettingsComponent.VolumeChannel channel, float value) //음량 변경을 저장과 실제 재생에 함께 반영
+        {
+            settingsComponent.setVolume(channel, value);
+            audioComponent.applyVolumes(masterVolume, musicVolume, effectsVolume);
+        }
+
+        public void applyDisplay(Vector2Int resolution, bool useFullscreen) //사용자가 선택한 화면 설정 미리보기
+        {
+            settingsComponent.previewDisplay(resolution, useFullscreen);
+        }
+
+        public void confirmDisplay() //화면 설정 유지 요청
+        {
+            settingsComponent.confirmDisplay();
+        }
+
+        public void cancelDisplay() //화면 설정 원복 요청
+        {
+            settingsComponent.cancelDisplay();
+        }
+
+        public void saveSettings() //설정창을 닫을 때 변경한 음량 저장
+        {
+            settingsComponent.save();
+        }
+
+        public float getPlayerVoiceVolume(int playerId) //특정 참가자의 수신 음량 조회
+        {
+            return voiceComponent.getPlayerVolume(playerId);
+        }
+
+        public void setPlayerVoiceVolume(int playerId, float value) //특정 참가자의 수신 음량 변경
+        {
+            voiceComponent.setPlayerVolume(playerId, value);
+        }
+
+        public string getPlayerVoiceStatus(int playerId) //특정 참가자의 수신 연결 상태 조회
+        {
+            return voiceComponent.getPlayerStatus(playerId);
+        }
+
+        public void playMusic(AudioClip clip) //외부 요청의 음악 재생 위임
+        {
+            audioComponent.playMusic(clip);
+        }
+
+        public void playEffect(AudioClip clip) //외부 요청의 효과음 재생 위임
+        {
+            audioComponent.playEffect(clip);
         }
 
         public void stopVoice() //퇴장 시 마이크와 음성 연결 정리
@@ -497,6 +562,7 @@ namespace CantResell
 
         private void displayState() //UI와 상품 연출에 수신자용 상태 전달
         {
+            voiceComponent.updateParticipants(localState);
             uiComponent.showState(localState, networkComponent.roomTitle + "  ·  " + networkComponent.roomName);
             viewComponent.showState(localState);
         }

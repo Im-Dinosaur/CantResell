@@ -61,7 +61,7 @@ namespace CantResell
         {
             using SHA256 hash = SHA256.Create(); //평문 비밀번호 대신 전달할 해시
             byte[] digest = hash.ComputeHash(Encoding.UTF8.GetBytes(code + ":" + (password ?? ""))); //방 식별자를 포함한 검증 값
-            return new byte[] { 2 }.Concat(digest).ToArray();
+            return new byte[] { 3 }.Concat(digest).ToArray();
         }
 
         public static bool acceptsToken(byte[] expected, byte[] received) //누락과 변조된 입장 요청 차단
@@ -140,7 +140,7 @@ namespace CantResell
                     PlayerCount = 4,
                     IsVisible = true,
                     IsOpen = true,
-                    SessionProperties = host ? new Dictionary<string, SessionProperty> { { "v", 2 }, { "t", title }, { "p", locked ? 1 : 0 } } : null,
+                    SessionProperties = host ? new Dictionary<string, SessionProperty> { { "v", 3 }, { "t", title }, { "p", locked ? 1 : 0 } } : null,
                     ConnectionToken = admissionToken,
                     EnableClientSessionCreation = false,
                     Scene = sceneInfo,
@@ -363,7 +363,7 @@ namespace CantResell
             List<Room> rooms = new List<Room>(); //이번 목록의 표시 항목
             foreach (SessionInfo session in sessions) //Photon에서 전달한 전체 방 목록
             {
-                if (!session.Properties.TryGetValue("v", out SessionProperty version) || !version.IsInt || (int)version != 2 ||
+                if (!session.Properties.TryGetValue("v", out SessionProperty version) || !version.IsInt || (int)version != 3 ||
                     !session.Properties.TryGetValue("t", out SessionProperty title) || !title.IsString ||
                     !session.Properties.TryGetValue("p", out SessionProperty password) || !password.IsInt)
                     continue;

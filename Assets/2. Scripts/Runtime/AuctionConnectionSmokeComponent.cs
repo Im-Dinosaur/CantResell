@@ -39,7 +39,9 @@ namespace CantResell
                 await waitFor(() => FindAnyObjectByType<AuctionGame>() != null, "game");
                 game = FindAnyObjectByType<AuctionGame>();
                 AudioListener.volume = 0;
-                if (role == "host")
+                if (role == "settings")
+                    await displayScenario();
+                else if (role == "host")
                     await hostScenario();
                 else
                     await clientScenario();
@@ -62,7 +64,7 @@ namespace CantResell
             game.createRoom("검증 방장", title, true, "Smoke123");
             await waitFor(() => SceneManager.GetActiveScene().name == "StandBy" && game.voice.connected, "HOST_VOICE");
             mark("PRIVATE_CREATED");
-            await waitFor(() => FindObjectsByType<Speaker>(FindObjectsSortMode.None).Any(speaker => speaker.IsPlaying), "VOICE_AUDIO_RECEIVED", 150);
+            await verifyIndividualVoiceVolumes();
             mark("VOICE_AUDIO_RECEIVED");
             await Task.Delay(250);
             game.requestReady();
@@ -108,7 +110,7 @@ namespace CantResell
             if (game.voice.microphoneEnabled)
                 throw new InvalidOperationException("Microphone must stay off in network smoke tests.");
             mark("VOICE_CONNECTED_MIC_OFF");
-            if (role == "client2")
+            if (role == "client2" || role == "client3")
                 await sendSyntheticAudio();
             await Task.Delay(500);
             game.requestReady();
@@ -138,17 +140,95 @@ namespace CantResell
                 samples[index] = 0.025f * Mathf.Sin(index * 2 * Mathf.PI * 440 / 24000);
             clip.SetData(samples, 0);
             game.voice.enabled = false;
+            recorder.UserData = FindAnyObjectByType<Fusion.NetworkRunner>().LocalPlayer.RawEncoded;
+            File.WriteAllText(Path.Combine(directory, role + "_PlayerId.txt"), recorder.UserData.ToString());
             recorder.SourceType = Recorder.InputSourceType.AudioClip;
             recorder.AudioClip = clip;
             recorder.VoiceDetection = false;
             recorder.TransmitEnabled = true;
             recorder.RecordingEnabled = true;
-            try { await waitFor(() => has("host", "VOICE_AUDIO_RECEIVED"), "SYNTHETIC_AUDIO"); }
+            try
+            {
+                await waitFor(() => has("host", "INITIAL_VOICE_GAINS"), "SYNTHETIC_AUDIO");
+                if (role == "client2")
+                {
+                    recorder.RestartRecording();
+                    mark("VOICE_RESTARTED");
+                }
+                await waitFor(() => has("host", "VOICE_AUDIO_RECEIVED"), "RESTART_VOLUME");
+            }
             finally
             {
                 recorder.TransmitEnabled = recorder.RecordingEnabled = false;
                 game.voice.enabled = true;
                 Destroy(clip);
+            }
+        }
+
+        private async Task verifyIndividualVoiceVolumes() //서로 다른 두 송신자의 실제 재생 음량과 재연결 유지 검증
+        {
+            await waitFor(() => FindObjectsByType<Speaker>(FindObjectsSortMode.None).Count(speaker => speaker.IsPlaying) >= 2, "TWO_VOICES", 150);
+            int firstId = int.Parse(File.ReadAllText(Path.Combine(directory, "client2_PlayerId.txt"))); //음소거할 게임 참가자
+            int secondId = int.Parse(File.ReadAllText(Path.Combine(directory, "client3_PlayerId.txt"))); //별도 음량을 적용할 게임 참가자
+            Speaker findSpeaker(int id) //게임 ID로 실제 원격 출력 조회
+            {
+                return FindObjectsByType<Speaker>(FindObjectsSortMode.None).FirstOrDefault(speaker => speaker.RemoteVoice?.VoiceInfo.UserData is int owner && owner == id);
+            }
+            Speaker first = findSpeaker(firstId); //재시작 전 첫 참가자의 출력
+            Speaker second = findSpeaker(secondId); //두 번째 참가자의 출력
+            await waitFor(() => first != null && second != null && first.GetComponent<AudioSource>().volume == 1 && second.GetComponent<AudioSource>().volume == 1, "DEFAULT_VOICE_GAINS");
+            button("설정").onClick.Invoke();
+            game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_" + firstId).value = 0;
+            if (first.GetComponent<AudioSource>().volume != 0 || second.GetComponent<AudioSource>().volume != 1)
+                throw new InvalidOperationException("Muting one player affected another speaker.");
+            game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_" + secondId).value = 0.35f;
+            if (Mathf.Abs(second.GetComponent<AudioSource>().volume - 0.35f) > 0.001f)
+                throw new InvalidOperationException("Second speaker gain was not applied.");
+            mark("INITIAL_VOICE_GAINS");
+            await waitFor(() => has("client2", "VOICE_RESTARTED") && findSpeaker(firstId) != null && findSpeaker(firstId) != first && findSpeaker(firstId).IsPlaying, "RECREATED_SPEAKER");
+            if (findSpeaker(firstId).GetComponent<AudioSource>().volume != 0 || Mathf.Abs(findSpeaker(secondId).GetComponent<AudioSource>().volume - 0.35f) > 0.001f)
+                throw new InvalidOperationException("Voice restart lost individual volume settings.");
+            mark("VOICE_RESTART_GAIN_PRESERVED");
+            button("닫기").onClick.Invoke();
+        }
+
+        private async Task displayScenario() //실제 Windows 창의 해상도 적용과 확인 및 자동 원복 검증
+        {
+            string prefix = "CantResell.Test.Display." + Guid.NewGuid() + "."; //일반 설정을 건드리지 않는 저장 영역
+            AuctionSettingsComponent settings = game.GetComponent<AuctionSettingsComponent>(); //표시 설정 담당
+            settings.initialize(prefix, false);
+            try
+            {
+                Vector2Int first = new Vector2Int(1280, 720); //확정해서 저장할 창 크기
+                Vector2Int second = new Vector2Int(1600, 900); //취소할 임시 창 크기
+                if (!settings.resolutions.Contains(first) || !settings.resolutions.Contains(second))
+                    throw new InvalidOperationException("Display smoke requires a monitor supporting 1600x900.");
+                game.applyDisplay(first, false);
+                await waitFor(() => Screen.width == first.x && Screen.height == first.y && !Screen.fullScreen, "WINDOW_RESOLUTION");
+                game.confirmDisplay();
+                if (PlayerPrefs.GetInt(prefix + "Width") != first.x || PlayerPrefs.GetInt(prefix + "Height") != first.y)
+                    throw new InvalidOperationException("Confirmed resolution was not persisted.");
+                mark("WINDOW_SAVED");
+                game.applyDisplay(second, false);
+                await waitFor(() => Screen.width == second.x && Screen.height == second.y, "PREVIEW_RESOLUTION");
+                game.cancelDisplay();
+                await waitFor(() => Screen.width == first.x && Screen.height == first.y, "CANCEL_RESOLUTION");
+                mark("CANCEL_RESTORED");
+                game.applyDisplay(second, false);
+                await waitFor(() => !game.displayPending && Screen.width == first.x && Screen.height == first.y, "AUTO_REVERT", 25);
+                mark("TIMEOUT_RESTORED");
+                game.applyDisplay(first, true);
+                await waitFor(() => Screen.fullScreen, "FULLSCREEN_MODE");
+                game.cancelDisplay();
+                await waitFor(() => !Screen.fullScreen && Screen.width == first.x && Screen.height == first.y, "WINDOW_MODE_RESTORED");
+                mark("FULLSCREEN_RESTORED");
+            }
+            finally
+            {
+                game.cancelDisplay();
+                foreach (string key in new[] { "Volume", "MusicVolume", "EffectsVolume", "Width", "Height", "Fullscreen" }) //검증 저장 값 제거
+                    PlayerPrefs.DeleteKey(prefix + key);
+                PlayerPrefs.Save();
             }
         }
 

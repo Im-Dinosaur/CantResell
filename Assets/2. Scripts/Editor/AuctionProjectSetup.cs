@@ -127,7 +127,7 @@ namespace CantResell.Editor
                     recorderData.FindProperty("voiceDetection").boolValue = true;
                     recorderData.FindProperty("encrypt").boolValue = true;
                     recorderData.ApplyModifiedPropertiesWithoutUndo();
-                    FusionVoiceClient client = root.AddComponent<FusionVoiceClient>(); //Fusion 방 입퇴장을 따라갈 음성 클라이언트
+                    FusionVoiceClient client = root.AddComponent<AuctionVoiceClientComponent>(); //참가자별 음량을 지원하는 음성 클라이언트
                     client.UseFusionAppSettings = true;
                     client.UseFusionAuthValues = true;
                     client.PrimaryRecorder = recorder;
@@ -139,14 +139,42 @@ namespace CantResell.Editor
                 }
                 finally { UnityEngine.Object.DestroyImmediate(root); }
             }
+            GameObject runnerContents = PrefabUtility.LoadPrefabContents(runnerPath); //기존 SDK 설정을 보존할 러너 프리팹
+            try
+            {
+                if (runnerContents.GetComponent<AuctionVoiceClientComponent>() == null)
+                {
+                    FusionVoiceClient oldClient = runnerContents.GetComponent<FusionVoiceClient>(); //이전 기본 음성 클라이언트
+                    string clientSettings = JsonUtility.ToJson(oldClient); //기존 Inspector 설정과 참조
+                    UnityEngine.Object.DestroyImmediate(oldClient);
+                    AuctionVoiceClientComponent newClient = runnerContents.AddComponent<AuctionVoiceClientComponent>(); //참가자 ID를 읽는 음성 클라이언트
+                    JsonUtility.FromJsonOverwrite(clientSettings, newClient);
+                    newClient.PrimaryRecorder = runnerContents.GetComponent<Recorder>();
+                    newClient.SpeakerPrefab = speaker;
+                    runner = PrefabUtility.SaveAsPrefabAsset(runnerContents, runnerPath);
+                }
+            }
+            finally { PrefabUtility.UnloadPrefabContents(runnerContents); }
             GameObject contents = PrefabUtility.LoadPrefabContents(prefabPath); //기존 사용자 설정을 유지할 게임 프리팹 내용
             try
             {
                 AuctionVoiceComponent voice = contents.GetComponent<AuctionVoiceComponent>(); //음성 담당 구성 요소
                 if (voice == null)
                     voice = contents.AddComponent<AuctionVoiceComponent>();
+                AuctionSettingsComponent settings = contents.GetComponent<AuctionSettingsComponent>(); //사용자 설정 구성 요소
+                if (settings == null)
+                    settings = contents.AddComponent<AuctionSettingsComponent>();
+                AuctionAudioComponent audio = contents.GetComponent<AuctionAudioComponent>(); //음악과 효과음 구성 요소
+                if (audio == null)
+                    audio = contents.AddComponent<AuctionAudioComponent>();
+                SerializedObject audioData = new SerializedObject(audio); //전용 재생 경로 연결
+                connectAudioSource(audioData, "musicSource", contents.transform, "Music", true);
+                connectAudioSource(audioData, "effectsSource", contents.transform, "Effects", false);
+                audioData.ApplyModifiedPropertiesWithoutUndo();
                 SerializedObject gameData = new SerializedObject(contents.GetComponent<AuctionGame>()); //파사드의 음성 참조 연결
                 gameData.FindProperty("voiceComponent").objectReferenceValue = voice;
+                gameData.FindProperty("settingsComponent").objectReferenceValue = settings;
+                gameData.FindProperty("audioComponent").objectReferenceValue = audio;
                 gameData.ApplyModifiedPropertiesWithoutUndo();
                 SerializedObject networkData = new SerializedObject(contents.GetComponent<AuctionNetworkComponent>()); //네트워크 러너 프리팹 연결
                 networkData.FindProperty("runnerPrefab").objectReferenceValue = runner;
@@ -157,6 +185,19 @@ namespace CantResell.Editor
                 PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
             }
             finally { PrefabUtility.UnloadPrefabContents(contents); }
+        }
+
+        private static void connectAudioSource(SerializedObject data, string field, Transform parent, string name, bool loop) //기존 소스를 보존하며 빠진 음원 출력만 생성
+        {
+            if (data.FindProperty(field).objectReferenceValue != null)
+                return;
+            GameObject child = new GameObject(name); //채널별 재생 오브젝트
+            child.transform.SetParent(parent, false);
+            AudioSource source = child.AddComponent<AudioSource>(); //Inspector에서 음원을 연결할 출력
+            source.playOnAwake = false;
+            source.loop = loop;
+            source.spatialBlend = 0;
+            data.FindProperty(field).objectReferenceValue = source;
         }
 
         public static void buildConnectionSmoke() //마이크를 사용하지 않는 별도 Photon 접속 검증 빌드

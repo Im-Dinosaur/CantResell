@@ -2,6 +2,8 @@ using Fusion;
 using Photon.Voice.Fusion;
 using Photon.Voice.Unity;
 using UnityEngine;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CantResell
 {
@@ -10,6 +12,10 @@ namespace CantResell
         [SerializeField, Range(0.001f, 0.1f)] private float detectionThreshold = 0.01f; //주변 잡음을 제외할 송신 임계값
         private FusionVoiceClient client; //현재 Fusion 방을 따라가는 음성 클라이언트
         private Recorder recorder; //로컬 마이크 입력 처리
+        private NetworkRunner runner; //송신자의 게임 참가자 ID 확인
+        private readonly Dictionary<int, float> playerVolumes = new Dictionary<int, float>(); //현재 방의 참가자별 수신 음량
+        private readonly Dictionary<Speaker, int> speakers = new Dictionary<Speaker, int>(); //음성 출력과 게임 참가자의 연결
+        private readonly HashSet<int> participants = new HashSet<int>(); //최신 게임 상태에 포함된 상대 참가자
         public bool microphoneEnabled { get; private set; } //사용자가 켠 마이크 상태
         public bool testing { get; private set; } //송신 없이 마이크 입력을 검사하는 상태
         public bool connected => client != null && client.Client.InRoom; //음성 방 연결 완료 여부
@@ -19,9 +25,10 @@ namespace CantResell
             (testing ? "마이크 테스트 · 상대에게 전송하지 않음" : microphoneEnabled ? (transmitting ? "말하는 중" : "음성 연결됨 · 마이크 켜짐") : "음성 연결됨 · 마이크 꺼짐") :
             "음성 연결: " + client.ClientState; //현재 음성 연결 안내
 
-        public void attach(NetworkRunner runner) //입장 러너의 음성 구성 요소 연결
+        public void attach(NetworkRunner source) //입장 러너의 음성 구성 요소 연결
         {
             detach();
+            runner = source;
             client = runner.GetComponent<FusionVoiceClient>();
             recorder = runner.GetComponent<Recorder>();
             if (client == null || recorder == null)
@@ -35,7 +42,62 @@ namespace CantResell
             recorder.VoiceDetection = true;
             recorder.VoiceDetectionThreshold = detectionThreshold;
             recorder.Encrypt = true;
+            client.SpeakerLinked += onSpeakerLinked;
             client.AutoConnectAndJoin = true;
+        }
+
+        public void updateParticipants(AuctionState state) //떠난 참가자의 음량 제거와 현재 참가자 연결 갱신
+        {
+            participants.Clear();
+            if (state?.players != null)
+                for (int slot = 0; slot < state.players.Length; slot++) //현재 상대 좌석 정보
+                    if (slot != state.localSlot && state.players[slot] != null)
+                        participants.Add(state.players[slot].id);
+            foreach (int playerId in playerVolumes.Keys.Where(id => !participants.Contains(id)).ToArray()) //나간 참가자의 저장 음량
+                playerVolumes.Remove(playerId);
+            applyPlayerVolumes();
+        }
+
+        public float getPlayerVolume(int playerId) //발화 전에도 조절 가능한 참가자별 수신 음량
+        {
+            return playerVolumes.TryGetValue(playerId, out float volume) ? volume : 1;
+        }
+
+        public void setPlayerVolume(int playerId, float volume) //내 컴퓨터에서만 해당 참가자 음량 변경
+        {
+            if (!participants.Contains(playerId))
+                return;
+            playerVolumes[playerId] = AuctionSettingsComponent.normalizeVolume(volume);
+            applyPlayerVolumes();
+        }
+
+        public string getPlayerStatus(int playerId) //설정창의 수신 음성 상태 표시
+        {
+            if (getPlayerVolume(playerId) <= 0)
+                return "음소거";
+            return speakers.Any(pair => pair.Key != null && pair.Value == playerId) ? "음성 연결됨" : "음성 수신 대기";
+        }
+
+        private void onSpeakerLinked(Speaker speaker) //새 음성 스트림에 기존 개인 음량을 즉시 적용
+        {
+            if (!(speaker.RemoteVoice?.VoiceInfo.UserData is int playerId) || playerId <= 0)
+                return;
+            speakers[speaker] = playerId;
+            speaker.OnRemoteVoiceRemoveAction += onSpeakerRemoved;
+            applyPlayerVolumes();
+        }
+
+        private void onSpeakerRemoved(Speaker speaker) //마이크 재시작과 퇴장 시 사라진 출력 정리
+        {
+            speakers.Remove(speaker);
+            speaker.OnRemoteVoiceRemoveAction -= onSpeakerRemoved;
+        }
+
+        private void applyPlayerVolumes() //유효한 참가자의 모든 음성 출력에 수신 음량 적용
+        {
+            foreach (KeyValuePair<Speaker, int> pair in speakers) //참가자에게 연결된 음성 스트림
+                if (pair.Key != null)
+                    pair.Key.GetComponent<AudioSource>().volume = participants.Contains(pair.Value) ? getPlayerVolume(pair.Value) : 0;
         }
 
         public string toggleMicrophone() //명시적인 버튼 입력으로 마이크 녹음과 송신 전환
@@ -90,6 +152,9 @@ namespace CantResell
 
         private void Update() //음성 연결 복구 또는 단절 시 녹음 상태 동기화
         {
+            if (runner != null && runner.IsRunning && recorder != null && runner.LocalPlayer.RawEncoded > 0 &&
+                (!(recorder.UserData is int ownerId) || ownerId != runner.LocalPlayer.RawEncoded))
+                recorder.UserData = runner.LocalPlayer.RawEncoded;
             applyRecording();
         }
 
@@ -99,12 +164,20 @@ namespace CantResell
             applyRecording();
             if (client != null)
             {
+                client.SpeakerLinked -= onSpeakerLinked;
                 client.AutoConnectAndJoin = false;
                 if (client.Client.IsConnected)
                     client.Disconnect();
             }
             client = null;
             recorder = null;
+            runner = null;
+            foreach (Speaker speaker in speakers.Keys.ToArray()) //이벤트가 남지 않도록 음성 출력 해제
+                if (speaker != null)
+                    speaker.OnRemoteVoiceRemoveAction -= onSpeakerRemoved;
+            speakers.Clear();
+            participants.Clear();
+            playerVolumes.Clear();
         }
 
         private void OnDestroy() //오브젝트 종료 시 입력 장치 해제

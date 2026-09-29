@@ -60,7 +60,7 @@ namespace CantResell.Tests
             Assert.IsFalse(data.FindProperty("recordingEnabled").boolValue);
             Assert.IsFalse(data.FindProperty("transmitEnabled").boolValue);
             Assert.IsFalse(data.FindProperty("recordWhenJoined").boolValue);
-            Component client = runner.GetComponents<Component>().Single(component => component.GetType().Name == "FusionVoiceClient"); //음성 연결 구성
+            Component client = runner.GetComponents<Component>().Single(component => component.GetType().Name == "AuctionVoiceClientComponent"); //음성 연결 구성
             data = new SerializedObject(client);
             Assert.IsTrue(data.FindProperty("usePrimaryRecorder").boolValue);
             Assert.IsNotNull(data.FindProperty("speakerPrefab").objectReferenceValue);
@@ -206,7 +206,7 @@ namespace CantResell.Tests
                 AuctionGame[] facades = scene.GetRootGameObjects().SelectMany(value => value.GetComponentsInChildren<AuctionGame>()).ToArray(); //씬에 연결된 진입점 목록
                 Assert.AreEqual(1, facades.Length);
                 SerializedObject settings = new SerializedObject(facades[0]); //저장된 구성 요소 참조
-                foreach (string field in new[] { "roundComponent", "itemComponent", "bidComponent", "economyComponent", "networkComponent", "uiComponent", "viewComponent" }) //필수 연결 필드
+                foreach (string field in new[] { "roundComponent", "itemComponent", "bidComponent", "economyComponent", "networkComponent", "uiComponent", "viewComponent", "voiceComponent", "settingsComponent", "audioComponent" }) //필수 연결 필드
                     Assert.IsNotNull(settings.FindProperty(field).objectReferenceValue, field);
                 Assert.AreEqual(1, scene.GetRootGameObjects().SelectMany(value => value.GetComponentsInChildren<Camera>()).Count());
             }

@@ -11,7 +11,7 @@ GameObject:
   - component: {fileID: 2723256520287318612}
   - component: {fileID: 254029729301336994}
   - component: {fileID: 1389005469753115251}
-  - component: {fileID: 4608896295271660189}
+  - component: {fileID: 7938108410590478700}
   m_Layer: 0
   m_Name: AuctionRunner
   m_TagString: Untagged
@@ -89,7 +89,7 @@ MonoBehaviour:
   useOnAudioFilterRead: 0
   useMicrophoneTypeFallback: 1
   recordWhenJoined: 0
---- !u!114 &4608896295271660189
+--- !u!114 &7938108410590478700
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -98,9 +98,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 7530881776506737807}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 33a38d73a8571ce438052dd31e09df5b, type: 3}
+  m_Script: {fileID: 11500000, guid: 6d0fdbfb8fbdad94e8b89f2b9ab2e43a, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: PhotonVoice.Fusion::Photon.Voice.Fusion.FusionVoiceClient
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionVoiceClientComponent
   Id: 
   DisconnectAfterKeepAlive: 0
   KeepAliveInBackground: 60000

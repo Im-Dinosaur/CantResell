@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
@@ -31,6 +33,18 @@ namespace CantResell
         private CanvasGroup homeInputs; //팝업 뒤 메뉴의 키보드 및 마우스 입력 차단
         private CanvasGroup browserInputs; //팝업 뒤 목록의 키보드 및 마우스 입력 차단
         private bool settingsOpen; //설정 창의 배경 입력 차단 상태
+        private CanvasGroup pageInputs; //설정 뒤 화면의 탐색과 클릭 차단
+        private RectTransform settingsOverlay; //모든 씬에서 공유하는 설정 화면
+        private RectTransform participantRows; //개인 음량을 표시할 오른쪽 영역
+        private string participantSignature; //참가자 변경 시에만 행을 다시 만드는 기준
+        private readonly Dictionary<int, Text> participantStatus = new Dictionary<int, Text>(); //참가자별 음성 수신 상태 표시
+        private Dropdown resolutionDropdown; //지원하는 화면 크기 선택
+        private Button screenModeButton; //창 모드와 전체 화면 선택
+        private Button displayApplyButton; //화면 변경 적용과 유지 확인
+        private Button displayCancelButton; //화면 변경 취소
+        private Text displayInfoLabel; //해상도 변경 결과와 원복 시간
+        private bool selectedFullscreen; //적용하기 전 화면 모드 선택
+        private bool wasDisplayPending; //자동 원복 후 선택 목록 갱신 기준
         private Text voiceLabel; //음성 연결 상태 표시
         private Image microphoneLevel; //마이크 테스트 입력 막대
         private Button microphoneButton; //마이크 송신 전환 버튼
@@ -68,13 +82,13 @@ namespace CantResell
             GameObject eventObject = new GameObject("AuctionEventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule)); //새 Input System의 UI 입력
             eventObject.transform.SetParent(transform, false);
             eventObject.GetComponent<InputSystemUIInputModule>().AssignDefaultActions();
-            AudioListener.volume = PlayerPrefs.GetFloat("CantResell.Volume", 0.8f);
         }
 
         public void showScene(string nextScene) //씬 역할에 맞는 화면 생성
         {
             if (canvas == null || (page != null && sceneName == nextScene))
                 return;
+            closeSettings();
             if (page != null)
             {
                 page.gameObject.SetActive(false);
@@ -96,6 +110,7 @@ namespace CantResell
             page = createRect(canvas.transform, "Page", 0, 0, 1600, 900);
             page.anchorMin = page.anchorMax = page.pivot = new Vector2(0.5f, 0.5f);
             page.anchoredPosition = Vector2.zero;
+            pageInputs = page.gameObject.AddComponent<CanvasGroup>();
             roomLabel = createText(page, "", 58, 869, 1484, 28, 15, new Color(0.72f, 0.66f, 0.56f));
             noticeLabel = createText(page, "", 58, 816, 1484, 48, 20);
             if (nextScene == "Home")
@@ -105,6 +120,7 @@ namespace CantResell
             else
             {
                 createText(page, "반품 불가!", 52, 28, 430, 62, 42, accentColor);
+                createButtonAt(page, "설정", 1210, 34, 145, 48, showSettings, false);
                 createButtonAt(page, "방 나가기", 1370, 34, 175, 48, game.leaveRoom, false);
                 buildPlay();
                 buildVoiceControls(false);
@@ -302,6 +318,7 @@ namespace CantResell
         private void buildLobby() //참가자 목록과 준비 및 색상 선택 구성
         {
             createButtonAt(page, "방 나가기", 55, 35, 180, 51, game.leaveRoom, false);
+            createButtonAt(page, "설정", 250, 35, 120, 51, showSettings, false);
             Text heading = createText(page, "경매 시작 전", 570, 33, 460, 56, 32, accentColor); //상단 중앙 제목
             heading.alignment = TextAnchor.MiddleCenter;
             createText(page, "누구의 말을 믿으시겠어요?", 626, 97, 440, 39, 20);
@@ -382,6 +399,7 @@ namespace CantResell
         public void showState(AuctionState nextState, string room) //호스트가 허용한 정보만 화면에 표시
         {
             state = nextState;
+            refreshSettingsPlayers();
             receivedAt = Time.realtimeSinceStartupAsDouble;
             if (page == null)
                 return;
@@ -445,6 +463,21 @@ namespace CantResell
 
         private void Update() //상태 수신 사이의 남은 시간을 부드럽게 표시
         {
+            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+            {
+                if (settingsOpen)
+                    closeSettings();
+                else if (modal != null && !busy)
+                    closeRoomModal();
+                else
+                    showSettings();
+            }
+            if (settingsOpen)
+            {
+                updateDisplayControls();
+                foreach (KeyValuePair<int, Text> pair in participantStatus) //마이크 연결과 음소거 상태 갱신
+                    pair.Value.text = game.getPlayerVoiceStatus(pair.Key);
+            }
             if (voiceLabel != null && game.voice != null)
             {
                 voiceLabel.text = game.voice.status;
@@ -492,46 +525,190 @@ namespace CantResell
                 browserInputs.interactable = value;
         }
 
-        private void showSettings() //음량과 전체 화면 설정 창 표시
+        private void showSettings() //오디오와 화면 및 개인 음성 설정 창 표시
         {
-            if (settingsOpen || modal != null)
+            if (settingsOpen || modal != null || busy || page == null)
                 return;
             settingsOpen = true;
+            pageInputs.interactable = pageInputs.blocksRaycasts = false;
             setHomeInputAvailable(false);
-            RectTransform overlay = createPanel(page, "Settings", 0, 0, 1600, 900); //뒤쪽 메뉴 입력을 막을 설정 배경
-            overlay.GetComponent<Image>().color = new Color(0.025f, 0.035f, 0.06f, 0.97f);
-            createText(overlay, "설정", 540, 215, 520, 70, 40, accentColor);
-            Text volumeLabel = createText(overlay, "전체 음량", 540, 325, 520, 48, 24); //음량 값 표시
-            RectTransform track = createPanel(overlay, "Volume", 540, 394, 520, 25); //음량 슬라이더 배경
-            track.GetComponent<Image>().color = new Color(0.2f, 0.24f, 0.32f);
-            Slider slider = track.gameObject.AddComponent<Slider>(); //설정 음량 입력
-            RectTransform handle = createPanel(track, "Handle", 0, -9, 24, 44); //슬라이더 손잡이
+            settingsOverlay = createPanel(canvas.transform, "Settings", 0, 0, 1600, 900);
+            settingsOverlay.anchorMin = settingsOverlay.anchorMax = settingsOverlay.pivot = new Vector2(0.5f, 0.5f);
+            settingsOverlay.anchoredPosition = Vector2.zero;
+            settingsOverlay.GetComponent<Image>().color = new Color(0.035f, 0.025f, 0.02f, 0.98f);
+            createText(settingsOverlay, "설정", 170, 52, 750, 65, 40, accentColor);
+            createButtonAt(settingsOverlay, "닫기", 1260, 55, 170, 50, closeSettings, false);
+            RectTransform audioPanel = createPanel(settingsOverlay, "AudioDisplaySettings", 170, 145, 620, 660); //왼쪽 오디오와 화면 설정
+            createText(audioPanel, "오디오", 24, 20, 572, 40, 26, accentColor);
+            createVolumeSlider(audioPanel, "MasterVolume", "마스터 볼륨", 75, game.masterVolume, value => game.setVolume(AuctionSettingsComponent.VolumeChannel.Master, value));
+            createVolumeSlider(audioPanel, "MusicVolume", "음악 볼륨", 154, game.musicVolume, value => game.setVolume(AuctionSettingsComponent.VolumeChannel.Music, value));
+            createVolumeSlider(audioPanel, "EffectsVolume", "효과음 볼륨", 233, game.effectsVolume, value => game.setVolume(AuctionSettingsComponent.VolumeChannel.Effects, value));
+            createText(audioPanel, "화면", 24, 331, 572, 40, 26, accentColor);
+            createText(audioPanel, "해상도", 24, 382, 572, 28, 19);
+            resolutionDropdown = createResolutionDropdown(audioPanel, 24, 417, 572);
+            screenModeButton = createButtonAt(audioPanel, "화면 모드", 24, 482, 572, 46, () =>
+            {
+                selectedFullscreen = !selectedFullscreen;
+                updateDisplayControls();
+            }, false);
+            displayCancelButton = createButtonAt(audioPanel, "되돌리기", 24, 546, 277, 50, () =>
+            {
+                game.cancelDisplay();
+                resetDisplaySelection();
+            }, false);
+            displayApplyButton = createButtonAt(audioPanel, "적용", 319, 546, 277, 50, () =>
+            {
+                if (game.displayPending)
+                    game.confirmDisplay();
+                else
+                    game.applyDisplay(game.resolutions[resolutionDropdown.value], selectedFullscreen);
+                updateDisplayControls();
+            });
+            displayInfoLabel = createText(audioPanel, "", 24, 610, 572, 44, 16);
+            resetDisplaySelection();
+            updateDisplayControls();
+            RectTransform voicePanel = createPanel(settingsOverlay, "PlayerVoiceSettings", 810, 145, 620, 660); //오른쪽 참가자별 음량
+            createText(voicePanel, "플레이어 음성", 24, 20, 572, 40, 26, accentColor);
+            createText(voicePanel, "내가 듣는 음량만 조절됩니다. 0%는 음소거입니다.", 24, 70, 572, 48, 18);
+            participantRows = createRect(voicePanel, "ParticipantVolumes", 0, 132, 620, 456);
+            participantSignature = null;
+            refreshSettingsPlayers();
+            createText(voicePanel, "참가자별 음량은 현재 방에서 유지됩니다.", 24, 610, 572, 40, 17);
+            createText(settingsOverlay, "마스터 볼륨은 음성채팅에도 적용됩니다. 설정 중에도 게임은 계속 진행됩니다.", 170, 837, 1260, 35, 18);
+            EventSystem.current?.SetSelectedGameObject(null);
+        }
+
+        private void closeSettings() //음량 저장과 미확인 해상도 원복 후 원래 화면 복귀
+        {
+            if (!settingsOpen)
+                return;
+            game.cancelDisplay();
+            game.saveSettings();
+            settingsOpen = false;
+            settingsOverlay.gameObject.SetActive(false);
+            Destroy(settingsOverlay.gameObject);
+            settingsOverlay = participantRows = null;
+            participantStatus.Clear();
+            pageInputs.interactable = pageInputs.blocksRaycasts = true;
+            setHomeInputAvailable(!busy && modal == null);
+            EventSystem.current?.SetSelectedGameObject(null);
+        }
+
+        private void resetDisplaySelection() //적용된 화면 크기와 모드를 선택 UI에 반영
+        {
+            resolutionDropdown.SetValueWithoutNotify(Math.Max(0, Array.IndexOf(game.resolutions, game.selectedResolution)));
+            selectedFullscreen = game.fullscreen;
+            wasDisplayPending = game.displayPending;
+        }
+
+        private void updateDisplayControls() //해상도 변경 확인과 자동 원복 안내 갱신
+        {
+            if (wasDisplayPending && !game.displayPending)
+                resetDisplaySelection();
+            wasDisplayPending = game.displayPending;
+            resolutionDropdown.interactable = screenModeButton.interactable = !game.displayPending;
+            screenModeButton.GetComponentInChildren<Text>().text = "화면 모드: " + (selectedFullscreen ? "전체 화면" : "창 모드");
+            displayApplyButton.GetComponentInChildren<Text>().text = game.displayPending ? "이 설정 유지" : "적용";
+            displayCancelButton.interactable = game.displayPending;
+            displayInfoLabel.text = game.displayPending ? game.displaySeconds + "초 후 이전 화면으로 돌아갑니다." :
+                string.IsNullOrEmpty(game.displayMessage) ? "변경 후 15초 안에 유지 여부를 확인해 주세요." : game.displayMessage;
+        }
+
+        private void refreshSettingsPlayers() //이름과 입퇴장 변경 시에만 개인 음량 행 갱신
+        {
+            if (!settingsOpen || participantRows == null)
+                return;
+            AuctionState.Player[] others = state?.players == null ? Array.Empty<AuctionState.Player>() :
+                state.players.Where((player, slot) => player != null && slot != state.localSlot).ToArray(); //현재 방의 상대 참가자
+            string signature = string.Join("|", others.Select(player => player.id + ":" + player.name)); //준비 상태 변화에는 행을 유지할 참가자 기준
+            if (participantSignature == signature)
+                return;
+            participantSignature = signature;
+            participantStatus.Clear();
+            foreach (Transform child in participantRows) //이전 참가자 행 정리
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+            if (others.Length == 0)
+                createText(participantRows, "다른 플레이어가 참가하면\n이곳에서 음량을 조절할 수 있습니다.", 24, 100, 572, 140, 23);
+            for (int index = 0; index < others.Length; index++) //상대 참가자의 이름과 수신 음량
+            {
+                int playerId = others[index].id; //슬라이더가 조절할 게임 참가자 ID
+                RectTransform row = createRect(participantRows, "Participant_" + playerId, 0, index * 152, 620, 147); //참가자 한 명의 조절 영역
+                createText(row, others[index].name, 24, 0, 360, 35, 23);
+                participantStatus[playerId] = createText(row, game.getPlayerVoiceStatus(playerId), 394, 3, 202, 30, 17, accentColor);
+                participantStatus[playerId].alignment = TextAnchor.MiddleRight;
+                createVolumeSlider(row, "Voice_" + playerId, "음성 볼륨", 51, game.getPlayerVoiceVolume(playerId), value => game.setPlayerVoiceVolume(playerId, value));
+            }
+        }
+
+        private Slider createVolumeSlider(Transform parent, string name, string title, float y, float value, UnityEngine.Events.UnityAction<float> changed) //수치 표시가 있는 음량 슬라이더 생성
+        {
+            RectTransform row = createRect(parent, name, 24, y, 572, 70); //라벨과 조절 막대 영역
+            createText(row, title, 0, 0, 410, 30, 21);
+            Text amount = createText(row, Mathf.RoundToInt(value * 100) + "%", 432, 0, 140, 30, 21); //현재 퍼센트 표시
+            amount.alignment = TextAnchor.MiddleRight;
+            RectTransform track = createPanel(row, "Track", 10, 45, 552, 8); //음량 막대 배경
+            track.GetComponent<Image>().color = new Color(0.24f, 0.20f, 0.16f);
+            RectTransform fill = createPanel(track, "Fill", 0, 0, 552, 8); //설정 음량까지 채우는 영역
+            fill.GetComponent<Image>().color = accentColor;
+            RectTransform handleArea = createRect(row, "HandleArea", 10, 33, 552, 32); //손잡이의 이동 범위
+            RectTransform handle = createPanel(handleArea, "Handle", 0, 0, 20, 32); //드래그 손잡이
+            handle.pivot = new Vector2(0.5f, 0.5f);
+            handle.anchoredPosition = Vector2.zero;
+            handle.sizeDelta = new Vector2(20, 0);
             handle.GetComponent<Image>().color = accentColor;
+            Slider slider = row.gameObject.AddComponent<Slider>(); //키보드와 포인터 입력을 받을 음량 조절
+            fill.anchorMin = Vector2.zero;
+            fill.anchorMax = Vector2.one;
+            fill.offsetMin = fill.offsetMax = Vector2.zero;
+            slider.fillRect = fill;
             slider.handleRect = handle;
             slider.targetGraphic = handle.GetComponent<Image>();
-            slider.minValue = 0;
-            slider.maxValue = 1;
-            slider.value = AudioListener.volume;
-            slider.onValueChanged.AddListener(value =>
+            slider.SetValueWithoutNotify(value);
+            slider.onValueChanged.AddListener(next =>
             {
-                AudioListener.volume = value;
-                PlayerPrefs.SetFloat("CantResell.Volume", value);
-                volumeLabel.text = "전체 음량  " + Mathf.RoundToInt(value * 100) + "%";
+                amount.text = Mathf.RoundToInt(next * 100) + "%";
+                changed(next);
             });
-            Button fullscreen = createButtonAt(overlay, "전체 화면: " + (Screen.fullScreen ? "켜짐" : "꺼짐"), 540, 470, 520, 56, null, false); //화면 모드 변경 버튼
-            fullscreen.onClick.AddListener(() =>
-            {
-                Screen.fullScreen = !Screen.fullScreen;
-                fullscreen.GetComponentInChildren<Text>().text = "전체 화면 전환 요청됨";
-            });
-            createButtonAt(overlay, "닫기", 540, 580, 520, 56, () =>
-            {
-                PlayerPrefs.Save();
-                settingsOpen = false;
-                setHomeInputAvailable(!busy);
-                overlay.gameObject.SetActive(false);
-                Destroy(overlay.gameObject);
-            });
+            return slider;
+        }
+
+        private Dropdown createResolutionDropdown(Transform parent, float x, float y, float width) //스크롤 가능한 지원 해상도 선택 목록 생성
+        {
+            RectTransform rect = createPanel(parent, "Resolution", x, y, width, 48); //현재 해상도와 펼침 버튼
+            rect.GetComponent<Image>().color = new Color(0.17f, 0.125f, 0.095f);
+            Dropdown dropdown = rect.gameObject.AddComponent<Dropdown>(); //화면 크기 목록 입력
+            dropdown.targetGraphic = rect.GetComponent<Image>();
+            dropdown.captionText = createText(rect, "", 16, 4, width - 64, 40, 22);
+            dropdown.captionText.alignment = TextAnchor.MiddleLeft;
+            createText(rect, "▼", width - 38, 9, 30, 36, 21);
+            RectTransform template = createPanel(rect, "Template", 0, 50, width, 200); //펼쳐지는 목록 영역
+            template.GetComponent<Image>().color = new Color(0.10f, 0.075f, 0.06f);
+            RectTransform viewport = createRect(template, "Viewport", 4, 4, width - 8, 192); //스크롤 잘림 영역
+            viewport.gameObject.AddComponent<RectMask2D>();
+            RectTransform content = createRect(viewport, "Content", 0, 0, width - 8, 44); //해상도 행이 추가될 영역
+            RectTransform item = createPanel(content, "Item", 0, 0, width - 8, 44); //복제할 해상도 선택 행
+            item.anchorMin = new Vector2(0, 0.5f);
+            item.anchorMax = new Vector2(1, 0.5f);
+            item.sizeDelta = new Vector2(0, 44);
+            Toggle toggle = item.gameObject.AddComponent<Toggle>(); //드롭다운 내부 선택 표시
+            toggle.targetGraphic = item.GetComponent<Image>();
+            RectTransform check = createPanel(item, "Selected", 0, 0, width - 8, 44); //선택한 행 강조
+            check.GetComponent<Image>().color = new Color(0.48f, 0.30f, 0.12f);
+            toggle.graphic = check.GetComponent<Image>();
+            dropdown.itemText = createText(item, "", 14, 2, width - 44, 40, 21);
+            dropdown.itemText.alignment = TextAnchor.MiddleLeft;
+            ScrollRect scroll = template.gameObject.AddComponent<ScrollRect>(); //많은 해상도 항목 스크롤
+            scroll.viewport = viewport;
+            scroll.content = content;
+            scroll.horizontal = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            dropdown.template = template;
+            dropdown.AddOptions(game.resolutions.Select(size => size.x + " × " + size.y).ToList());
+            template.gameObject.SetActive(false);
+            return dropdown;
         }
 
         private void quitGame() //빌드 실행 종료

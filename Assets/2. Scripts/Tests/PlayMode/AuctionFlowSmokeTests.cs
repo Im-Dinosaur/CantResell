@@ -11,6 +11,8 @@ namespace CantResell.PlayTests
 {
     public sealed class AuctionFlowSmokeTests
     {
+        private string preferencePrefix; //사용자 설정을 보존할 검증 전용 저장 키
+        private float previousMaster; //검증 전에 사용하던 전체 음량
 #if UNITY_EDITOR
         private bool previousAsyncCompilation; //검증 전에 사용하던 에디터 셰이더 컴파일 설정
 
@@ -26,6 +28,8 @@ namespace CantResell.PlayTests
         public IEnumerator initializeThreeScenesAndRenderPrivateViews() //네트워크 접속 없이 실제 화면 초기화와 씬 유지 및 표시 검증
         {
             Directory.CreateDirectory("Logs/PrototypePreview");
+            preferencePrefix = "CantResell.Test.Play." + System.Guid.NewGuid() + ".";
+            previousMaster = AudioListener.volume;
             Screen.SetResolution(1600, 900, false);
             yield return null;
             yield return SceneManager.LoadSceneAsync("Home");
@@ -33,6 +37,7 @@ namespace CantResell.PlayTests
             yield return null;
             AuctionGame game = Object.FindAnyObjectByType<AuctionGame>(); //실행 중인 진입점
             Assert.IsNotNull(game);
+            game.GetComponent<AuctionSettingsComponent>().initialize(preferencePrefix, false);
             Assert.AreEqual(1, Object.FindObjectsByType<AuctionGame>(FindObjectsSortMode.None).Length);
             Assert.AreEqual(1, game.GetComponentsInChildren<InputField>().Length);
             Assert.IsFalse(game.voice.microphoneEnabled);
@@ -71,9 +76,32 @@ namespace CantResell.PlayTests
             game.GetComponentsInChildren<Button>().Single(button => button.name == "취소").onClick.Invoke();
             yield return null;
             game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
-            Assert.AreEqual(1, game.GetComponentsInChildren<Slider>().Length);
+            Assert.AreEqual(3, game.GetComponentsInChildren<Slider>().Length);
+            Assert.IsFalse(game.GetComponentsInChildren<Button>().Single(button => button.name == "방 만들기").IsInteractable());
+            Slider master = game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "MasterVolume"); //마스터 음량 입력
+            Slider music = game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "MusicVolume"); //음악 음량 입력
+            Slider effects = game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "EffectsVolume"); //효과음 음량 입력
+            master.value = 0.65f;
+            music.value = 0.3f;
+            effects.value = 0.8f;
+            Assert.AreEqual(0.65f, AudioListener.volume);
+            Assert.AreEqual(0.3f, game.transform.Find("Music").GetComponent<AudioSource>().volume);
+            Assert.AreEqual(0.8f, game.transform.Find("Effects").GetComponent<AudioSource>().volume);
+            Dropdown resolution = game.GetComponentInChildren<Dropdown>(); //해상도 선택 목록
+            Assert.Greater(resolution.options.Count, 0);
+            yield return null;
+            resolution.Show();
+            yield return null;
+            Assert.IsNotNull(GameObject.Find("Dropdown List"));
+            captureScreen(game, "Logs/PrototypePreview/SettingsResolution.png");
+            resolution.Hide();
+            yield return new WaitForSecondsRealtime(0.2f);
+            captureScreen(game, "Logs/PrototypePreview/SettingsHome.png");
             game.GetComponentsInChildren<Button>().Single(button => button.name == "닫기").onClick.Invoke();
             yield return null;
+            Assert.AreEqual(0.65f, PlayerPrefs.GetFloat(preferencePrefix + "Volume"));
+            Assert.AreEqual(0.3f, PlayerPrefs.GetFloat(preferencePrefix + "MusicVolume"));
+            Assert.AreEqual(0.8f, PlayerPrefs.GetFloat(preferencePrefix + "EffectsVolume"));
 
             yield return SceneManager.LoadSceneAsync("StandBy");
             yield return null;
@@ -95,15 +123,36 @@ namespace CantResell.PlayTests
             Assert.IsNotNull(GameObject.Find("Player1"));
             captureScreen(game, "Logs/PrototypePreview/StandBy.png");
             yield return null;
+            game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
+            Assert.AreEqual(6, game.GetComponentsInChildren<Slider>().Length);
+            Slider firstVoice = game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_1"); //첫 상대의 수신 음량
+            Slider otherVoice = game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_3"); //다른 상대의 수신 음량
+            firstVoice.value = 0;
+            otherVoice.value = 0.45f;
+            Assert.AreEqual(0, game.getPlayerVoiceVolume(1));
+            Assert.AreEqual(0.45f, game.getPlayerVoiceVolume(3));
+            Assert.AreEqual(1, game.getPlayerVoiceVolume(4));
+            Assert.IsFalse(game.GetComponentsInChildren<Slider>().Any(slider => slider.name == "Voice_2"));
+            game.GetComponent<AuctionUIComponent>().showState(state, "화면 검증");
+            Assert.AreSame(firstVoice, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_1"));
+            yield return null;
+            captureScreen(game, "Logs/PrototypePreview/SettingsStandBy.png");
 
             yield return SceneManager.LoadSceneAsync("Play");
             yield return null;
             yield return null;
             Assert.AreSame(game, Object.FindAnyObjectByType<AuctionGame>());
+            Assert.IsFalse(game.GetComponentsInChildren<Slider>().Any());
             Assert.AreEqual(1, Object.FindObjectsByType<AuctionGame>(FindObjectsSortMode.None).Length);
             state = createState(2, AuctionState.Phase.Inspection);
             game.receiveState(state);
             Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("상태: 알 수 없음")));
+            game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
+            Assert.AreEqual(0, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_1").value);
+            Assert.AreEqual(0.45f, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_3").value);
+            Assert.AreEqual(0.3f, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "MusicVolume").value);
+            game.GetComponentsInChildren<Button>().Single(button => button.name == "닫기").onClick.Invoke();
+            yield return null;
             Assert.IsTrue(game.GetComponentsInChildren<Button>().Single(button => button.name == "비밀 검사").interactable);
             state = createState(3, AuctionState.Phase.Bidding);
             game.receiveState(state);
@@ -127,6 +176,12 @@ namespace CantResell.PlayTests
             Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("1위  플레이어 1") && label.text.Contains("1위  플레이어 2")));
             captureScreen(game, "Logs/PrototypePreview/Results.png");
             yield return null;
+            game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
+            state = createState(6, AuctionState.Phase.Results);
+            state.players[3] = null;
+            game.receiveState(state);
+            Assert.AreEqual(5, game.GetComponentsInChildren<Slider>().Length);
+            Assert.IsFalse(game.GetComponentsInChildren<Slider>().Any(slider => slider.name == "Voice_4"));
             yield return null;
         }
 
@@ -199,6 +254,11 @@ namespace CantResell.PlayTests
             if (game != null)
                 Object.Destroy(game.gameObject);
             yield return null;
+            AudioListener.volume = previousMaster;
+            if (preferencePrefix != null)
+                foreach (string key in new[] { "Volume", "MusicVolume", "EffectsVolume", "Width", "Height", "Fullscreen" }) //테스트 저장 값 제거
+                    PlayerPrefs.DeleteKey(preferencePrefix + key);
+            PlayerPrefs.Save();
         }
     }
 }
