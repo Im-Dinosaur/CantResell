@@ -1,0 +1,6 @@
+{
+  "name": "CantResell.PlayTests",
+  "references": ["CantResell.Runtime", "Unity.ugui"],
+  "optionalUnityReferences": ["TestAssemblies"],
+  "autoReferenced": false
+}

@@ -1,0 +1,545 @@
+using System;
+using System.Linq;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace CantResell
+{
+    [DisallowMultipleComponent]
+    public sealed class AuctionGame : MonoBehaviour
+    {
+        [SerializeField] private AuctionRoundComponent roundComponent; //게임 단계와 시간 담당
+        [SerializeField] private AuctionItemComponent itemComponent; //상품 상태와 검사권 담당
+        [SerializeField] private AuctionBidComponent bidComponent; //입찰 검증 담당
+        [SerializeField] private AuctionEconomyComponent economyComponent; //자금과 정산 담당
+        [SerializeField] private AuctionNetworkComponent networkComponent; //Fusion 연결과 메시지 담당
+        [SerializeField] private AuctionUIComponent uiComponent; //메뉴와 게임 화면 담당
+        [SerializeField] private AuctionItemViewComponent viewComponent; //테이블과 상품 시연 담당
+        [SerializeField] private AuctionVoiceComponent voiceComponent; //방 음성 및 마이크 담당
+        public AuctionVoiceComponent voice => voiceComponent; //UI에 제공할 음성 상태
+        private static AuctionGame instance; //씬 사이에 유지할 진입점
+        private readonly AuctionState.Player[] players = new AuctionState.Player[4]; //호스트의 참가자 정보
+        private readonly bool[] loaded = new bool[4]; //참가자의 게임 씬 준비 여부
+        private readonly long[] receivedCommands = new long[4]; //참가자별 마지막 처리 요청
+        private readonly double[] commandTimes = new double[4]; //과도한 요청을 제한할 처리 시각
+        private AuctionState localState; //로컬 플레이어에게 허용된 화면 상태
+        private int match; //새 게임마다 증가하는 번호
+        private long stateSequence; //호스트의 상태 순번
+        private long commandSequence; //로컬 요청 순번
+        private long lastStateSequence = -1; //역순 상태 수신 방지 번호
+        private double nextSnapshotTime; //다음 시간 동기화 시각
+        private double nextPresenceTime; //다음 프로필과 로딩 상태 확인 시각
+        private string notice = "4명이 모여 준비하면 시작할 수 있습니다."; //공개 진행 안내
+        private string nickname = "플레이어"; //로컬 플레이어 이름
+        private int avatarColor; //로컬 캐릭터 색상
+        private bool returningHome; //중복 종료 방지 상태
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void resetStaticState() //도메인 재로드를 끈 에디터에서도 싱글턴 초기화
+        {
+            instance = null;
+        }
+
+        private void Awake() //컴포넌트 연결과 씬 유지 설정
+        {
+            if (instance != null && instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            instance = this;
+            if (roundComponent == null || itemComponent == null || bidComponent == null || economyComponent == null ||
+                networkComponent == null || uiComponent == null || viewComponent == null || voiceComponent == null)
+            {
+                Debug.LogError("AuctionGame의 Component 참조를 모두 연결해 주세요.", this);
+                enabled = false;
+                return;
+            }
+            DontDestroyOnLoad(gameObject);
+            Application.runInBackground = true;
+            roundComponent.resetLobby();
+            economyComponent.resetMatch();
+            networkComponent.initialize(this);
+            uiComponent.initialize(this);
+            SceneManager.sceneLoaded += onSceneLoaded;
+        }
+
+        private void Start() //현재 씬의 화면 구성
+        {
+            if (instance == this && enabled)
+                showScene(SceneManager.GetActiveScene().name);
+        }
+
+        private void OnDestroy() //씬 이벤트 연결 해제
+        {
+            if (instance != this)
+                return;
+            SceneManager.sceneLoaded -= onSceneLoaded;
+            stopVoice();
+            _ = networkComponent.disconnect();
+            instance = null;
+        }
+
+        private void onSceneLoaded(Scene scene, LoadSceneMode mode) //새 씬에 화면과 연출 연결
+        {
+            showScene(scene.name);
+        }
+
+        private void showScene(string sceneName) //각 씬의 표시 담당 구성 요소 호출
+        {
+            if (sceneName != "Home" && sceneName != "StandBy" && sceneName != "Play")
+                return;
+            uiComponent.showScene(sceneName);
+            viewComponent.showScene(sceneName);
+            if (sceneName != "StandBy")
+                voiceComponent.endTest();
+            if (sceneName == "Home" && !Application.isBatchMode && !returningHome)
+                refreshRooms();
+            if (localState != null)
+                displayState();
+            if (sceneName != "Home" && !networkComponent.isConnected && !networkComponent.isConnecting)
+                uiComponent.showMessage("Home 씬에서 방을 만들거나 참가해 주세요.");
+        }
+
+        private void Update() //호스트 진행과 화면 동기화 조율
+        {
+            if (instance != this || returningHome || !networkComponent.isConnected)
+                return;
+            double now = Time.realtimeSinceStartupAsDouble; //시간 배율에 영향을 받지 않는 현재 시각
+            if (networkComponent.isHost)
+            {
+                if (roundComponent.hasExpired(now))
+                    advancePhase(now);
+                if (now >= nextSnapshotTime)
+                {
+                    publishState();
+                    nextSnapshotTime = now + 1;
+                }
+            }
+            if (now >= nextPresenceTime)
+            {
+                nextPresenceTime = now + 1;
+                if (localState == null || localState.localSlot < 0 || localState.players[localState.localSlot]?.name != nickname)
+                    sendAction(AuctionState.Action.Profile, avatarColor);
+                if (localState?.phase == AuctionState.Phase.Loading && SceneManager.GetActiveScene().name == "Play")
+                    sendAction(AuctionState.Action.Loaded);
+            }
+        }
+
+        public async void refreshRooms() //Home 방 목록 연결과 오류 표시 조율
+        {
+            if (returningHome || networkComponent.isConnecting || networkComponent.isConnected)
+                return;
+            uiComponent.setBusy(true);
+            uiComponent.showRoomListStatus("방 목록에 연결하고 있습니다…");
+            string error = await networkComponent.refreshRooms(); //목록 연결 결과
+            if (this == null)
+                return;
+            uiComponent.setBusy(false);
+            if (error != null)
+                roomListUnavailable(error);
+        }
+
+        public void receiveRooms(AuctionNetworkComponent.Room[] rooms) //네트워크 목록을 UI로 전달
+        {
+            uiComponent.showRooms(rooms, networkComponent.region);
+        }
+
+        public void roomListUnavailable(string message) //실효된 목록을 지우고 재시도 안내
+        {
+            uiComponent.showRooms(Array.Empty<AuctionNetworkComponent.Room>(), "");
+            uiComponent.showRoomListStatus(message);
+        }
+
+        public void createRoom(string playerName, string title, bool locked, string password) //제목과 공개 설정으로 새 방 요청
+        {
+            title = AuctionNetworkComponent.cleanTitle(title);
+            if (title.Length == 0)
+            {
+                uiComponent.showMessage("방 제목을 입력해 주세요.");
+                return;
+            }
+            connectRoom(true, playerName, new AuctionNetworkComponent.Room { code = Guid.NewGuid().ToString("N").ToUpperInvariant(), title = title, locked = locked }, password);
+        }
+
+        public void joinRoom(string playerName, AuctionNetworkComponent.Room room, string password) //선택한 방으로 참가 요청
+        {
+            if (room == null || !room.open || room.players >= room.capacity)
+            {
+                uiComponent.showMessage("참가할 수 없는 방입니다. 목록을 새로고침해 주세요.");
+                return;
+            }
+            connectRoom(false, playerName, room, password);
+        }
+
+        private async void connectRoom(bool host, string playerName, AuctionNetworkComponent.Room room, string password) //방 생성과 참가의 공통 흐름
+        {
+            if (networkComponent.isConnecting || networkComponent.isConnected || returningHome)
+                return;
+            nickname = cleanName(playerName);
+            if (room.locked && !AuctionNetworkComponent.isValidPassword(password))
+            {
+                uiComponent.showMessage("비밀번호는 문자·숫자로 1~8자를 입력해 주세요.");
+                return;
+            }
+            Array.Clear(players, 0, players.Length);
+            Array.Clear(receivedCommands, 0, receivedCommands.Length);
+            Array.Clear(commandTimes, 0, commandTimes.Length);
+            localState = null;
+            lastStateSequence = -1;
+            stateSequence = 0;
+            commandSequence = 0;
+            roundComponent.resetLobby();
+            economyComponent.resetMatch();
+            notice = "4명이 모여 준비하면 시작할 수 있습니다.";
+            uiComponent.setBusy(true);
+            uiComponent.showMessage(host ? "방을 만들고 있습니다…" : "방에 참가하고 있습니다…");
+            string error = await networkComponent.connect(host, room.code, room.title, room.locked, password); //Photon 접속 결과
+            if (this == null)
+                return;
+            uiComponent.setBusy(false);
+            if (error != null)
+            {
+                connectionLost(error);
+                return;
+            }
+            sendAction(AuctionState.Action.Profile, avatarColor);
+            if (networkComponent.isHost)
+                publishState();
+        }
+
+        public void prepareVoice(Fusion.NetworkRunner runner) //입장할 방의 음성 구성 연결
+        {
+            voiceComponent.attach(runner);
+        }
+
+        public void stopVoice() //퇴장 시 마이크와 음성 연결 정리
+        {
+            if (voiceComponent != null)
+                voiceComponent.detach();
+        }
+
+        public void toggleMicrophone() //마이크 송신 전환 요청
+        {
+            string error = voiceComponent.toggleMicrophone(); //장치 준비 실패 안내
+            if (error != null)
+                uiComponent.showMessage(error);
+        }
+
+        public void toggleMicrophoneTest() //대기실에서 송신 없이 입력 레벨 검사
+        {
+            string error = voiceComponent.toggleTest(); //장치 준비 실패 안내
+            if (error != null)
+                uiComponent.showMessage(error);
+        }
+
+        public void requestReady() //준비 상태 변경 요청
+        {
+            if (localState?.localSlot >= 0)
+                sendAction(AuctionState.Action.Ready, 0, !localState.players[localState.localSlot].ready);
+        }
+
+        public void selectColor(int color) //캐릭터 색상 변경 요청
+        {
+            avatarColor = Mathf.Clamp(color, 0, 3);
+            sendAction(AuctionState.Action.Profile, avatarColor);
+        }
+
+        public void requestStart() //방장의 게임 시작 요청
+        {
+            sendAction(AuctionState.Action.Start);
+        }
+
+        public void requestInspection() //개인의 비밀 검사 요청
+        {
+            sendAction(AuctionState.Action.Inspect);
+        }
+
+        public void requestBid(int amount) //원하는 금액의 입찰 요청
+        {
+            sendAction(AuctionState.Action.Bid, amount);
+        }
+
+        public void requestLobby() //게임 종료 후 방장의 대기실 복귀 요청
+        {
+            sendAction(AuctionState.Action.ReturnToLobby);
+        }
+
+        private void sendAction(AuctionState.Action action, int value = 0, bool ready = false) //UI 행동을 네트워크 요청으로 변환
+        {
+            networkComponent.sendCommand(new AuctionState.Command
+            {
+                sequence = ++commandSequence, action = action, value = value, ready = ready,
+                name = nickname, match = localState?.match ?? match, round = localState?.round ?? 0
+            });
+        }
+
+        public bool canAcceptPlayers() //현재 방의 참가 허용 여부 반환
+        {
+            return roundComponent.phase == AuctionState.Phase.Lobby && players.Any(player => player == null);
+        }
+
+        public void playerJoined(int playerId) //호스트가 빈 좌석에 참가자 등록
+        {
+            if (!networkComponent.isHost || findSlot(playerId) >= 0 || !canAcceptPlayers())
+                return;
+            int slot = Array.FindIndex(players, player => player == null); //새 참가자의 좌석
+            players[slot] = new AuctionState.Player { id = playerId, name = "플레이어 " + (slot + 1), color = slot };
+            receivedCommands[slot] = 0;
+            commandTimes[slot] = 0;
+            publishState();
+        }
+
+        public void playerLeft(int playerId) //대기실 이탈 또는 진행 중 게임 중단
+        {
+            int slot = findSlot(playerId); //이탈한 참가자의 좌석
+            if (slot < 0)
+                return;
+            players[slot] = null;
+            if (roundComponent.phase != AuctionState.Phase.Lobby)
+                abortMatch("참가자가 나가 이번 게임을 중단했습니다. 대기실에서 다시 모여 주세요.");
+            else
+                publishState();
+        }
+
+        public void receiveCommand(int playerId, AuctionState.Command command) //실제 송신자와 단계에 따라 요청 검증 및 위임
+        {
+            int slot = findSlot(playerId); //네트워크 송신자로 확인한 좌석
+            double now = Time.realtimeSinceStartupAsDouble; //요청을 받은 호스트 시각
+            if (!networkComponent.isHost || command == null || command.version != 1 || slot < 0 ||
+                command.sequence <= receivedCommands[slot] || now - commandTimes[slot] < 0.075)
+                return;
+            receivedCommands[slot] = command.sequence;
+            commandTimes[slot] = now;
+            if (roundComponent.hasExpired(now))
+                advancePhase(now);
+            bool lobby = roundComponent.phase == AuctionState.Phase.Lobby; //대기실 단계 여부
+            bool sameRound = command.match == match && command.round == roundComponent.round; //지연 요청의 게임과 라운드 검증
+            switch (command.action)
+            {
+                case AuctionState.Action.Profile when lobby:
+                    players[slot].name = cleanName(command.name);
+                    players[slot].color = Mathf.Clamp(command.value, 0, 3);
+                    break;
+                case AuctionState.Action.Ready when lobby:
+                    players[slot].ready = command.ready;
+                    break;
+                case AuctionState.Action.Start when lobby && playerId == networkComponent.localId:
+                    if (players.Any(player => player == null || !player.ready))
+                    {
+                        reject(slot, "4명 모두 준비해야 시작할 수 있습니다.");
+                        return;
+                    }
+                    match++;
+                    Array.Clear(loaded, 0, loaded.Length);
+                    itemComponent.resetMatch();
+                    economyComponent.resetMatch();
+                    bidComponent.resetBids();
+                    roundComponent.enterPhase(AuctionState.Phase.Loading, now);
+                    notice = "모든 참가자가 게임 씬에 입장하기를 기다립니다.";
+                    networkComponent.setRoomOpen(false);
+                    publishState();
+                    networkComponent.loadGameScene(true);
+                    return;
+                case AuctionState.Action.Loaded when sameRound && roundComponent.phase == AuctionState.Phase.Loading:
+                    loaded[slot] = true;
+                    if (loaded.All(value => value))
+                        beginRound(0, now);
+                    break;
+                case AuctionState.Action.Inspect when sameRound && roundComponent.phase == AuctionState.Phase.Inspection:
+                    if (!itemComponent.tryInspect(slot, roundComponent.round))
+                    {
+                        reject(slot, "검사권이 없거나 이번 상품을 이미 확인했습니다.");
+                        return;
+                    }
+                    break;
+                case AuctionState.Action.Bid when sameRound && roundComponent.phase == AuctionState.Phase.Bidding:
+                    if (!bidComponent.tryBid(slot, roundComponent.round, economyComponent.getBalance(slot), command.value))
+                    {
+                        reject(slot, "입찰 금액, 잔액 또는 판매자 여부를 확인해 주세요.");
+                        return;
+                    }
+                    break;
+                case AuctionState.Action.ReturnToLobby when playerId == networkComponent.localId &&
+                    (roundComponent.phase == AuctionState.Phase.Results || roundComponent.phase == AuctionState.Phase.Aborted):
+                    roundComponent.resetLobby();
+                    economyComponent.resetMatch();
+                    bidComponent.resetBids();
+                    foreach (AuctionState.Player player in players) //남은 참가자의 준비 상태 초기화
+                        if (player != null)
+                            player.ready = false;
+                    notice = "4명이 모여 준비하면 시작할 수 있습니다.";
+                    networkComponent.setRoomOpen(true);
+                    publishState();
+                    networkComponent.loadGameScene(false);
+                    return;
+                default:
+                    reject(slot, "현재 단계에서는 사용할 수 없는 행동입니다.");
+                    return;
+            }
+            publishState();
+        }
+
+        private void beginRound(int index, double now) //새 상품과 입찰을 준비하고 판매 시작
+        {
+            itemComponent.prepareItem();
+            bidComponent.resetBids();
+            roundComponent.beginRound(index, now);
+            notice = "판매자가 상품을 소개합니다. 설명은 진실일 수도, 거짓일 수도 있습니다.";
+        }
+
+        private void advancePhase(double now) //시간 만료 시 담당 구성 요소의 처리 순서 조율
+        {
+            switch (roundComponent.phase)
+            {
+                case AuctionState.Phase.Loading:
+                    abortMatch("입장이 지연되어 게임을 시작하지 못했습니다. 대기실에서 다시 시도해 주세요.");
+                    return;
+                case AuctionState.Phase.Pitch:
+                    roundComponent.enterPhase(AuctionState.Phase.Inspection, now);
+                    notice = "검사권으로 상품 상태를 확인할 수 있습니다. 결과는 본인에게만 보입니다.";
+                    break;
+                case AuctionState.Phase.Inspection:
+                    roundComponent.enterPhase(AuctionState.Phase.Bidding, now);
+                    notice = "가장 높은 금액을 제시한 사람이 낙찰받습니다.";
+                    break;
+                case AuctionState.Phase.Bidding:
+                    if (!economyComponent.settleRound(roundComponent.round, roundComponent.round,
+                        bidComponent.bidderSlot, bidComponent.highestBid, itemComponent.getCondition()))
+                    {
+                        abortMatch("정산 상태를 확인하지 못해 게임을 중단했습니다.");
+                        return;
+                    }
+                    roundComponent.enterPhase(AuctionState.Phase.Reveal, now);
+                    notice = bidComponent.bidderSlot < 0 ? "유찰! 거래 없이 상품 상태만 공개합니다." :
+                        itemComponent.getCondition() ? "정상 상품! 낙찰자에게 보상이 지급됐습니다." : "불량 상품! 환불은 없습니다.";
+                    break;
+                case AuctionState.Phase.Reveal:
+                    if (roundComponent.round >= 3)
+                    {
+                        roundComponent.enterPhase(AuctionState.Phase.Results, now);
+                        notice = "게임 종료! 소지금이 가장 많은 플레이어가 승리합니다. 동점은 공동 순위입니다.";
+                    }
+                    else
+                        beginRound(roundComponent.round + 1, now);
+                    break;
+            }
+            publishState();
+        }
+
+        public void abortMatch(string reason) //진행 중 오류나 이탈을 전체 참가자에게 알림
+        {
+            if (!networkComponent.isHost)
+                return;
+            roundComponent.enterPhase(AuctionState.Phase.Aborted, 0);
+            notice = reason;
+            publishState();
+        }
+
+        private int findSlot(int playerId) //실제 접속 식별자로 좌석 찾기
+        {
+            return Array.FindIndex(players, player => player != null && player.id == playerId);
+        }
+
+        private void publishState() //개별 권한을 적용한 상태를 참가자마다 전송
+        {
+            stateSequence++;
+            for (int slot = 0; slot < players.Length; slot++) //전송 대상 좌석
+                if (players[slot] != null)
+                    networkComponent.sendState(players[slot].id, createState(slot, notice));
+        }
+
+        private void reject(int slot, string reason) //거절 이유를 요청자에게만 통지
+        {
+            stateSequence++;
+            networkComponent.sendState(players[slot].id, createState(slot, reason));
+        }
+
+        private AuctionState createState(int slot, string message) //공개 정보와 수신자의 비밀 정보만 복사
+        {
+            bool hasItem = roundComponent.phase >= AuctionState.Phase.Pitch && roundComponent.phase <= AuctionState.Phase.Results; //공개 대상 상품 존재 여부
+            bool revealed = roundComponent.phase == AuctionState.Phase.Reveal || roundComponent.phase == AuctionState.Phase.Results; //상품 전체 공개 여부
+            bool knows = hasItem && itemComponent.knowsCondition(slot, roundComponent.round, revealed); //수신자의 상품 열람 권한
+            AuctionState state = new AuctionState //호스트 내부 상태와 분리한 전송용 복사본
+            {
+                sequence = stateSequence, match = match, phase = roundComponent.phase, round = roundComponent.round,
+                localSlot = slot, hostSlot = findSlot(networkComponent.localId), sellerSlot = hasItem ? roundComponent.round : -1,
+                bidderSlot = bidComponent.bidderSlot, highestBid = bidComponent.highestBid,
+                minimumRaise = bidComponent.raiseAmount, normalReward = economyComponent.reward,
+                secondsRemaining = roundComponent.getRemaining(Time.realtimeSinceStartupAsDouble),
+                knowsCondition = knows, goodCondition = knows && itemComponent.getCondition(),
+                inspected = hasItem && itemComponent.hasInspected(slot), inspectionTickets = itemComponent.getTickets(slot), notice = message
+            };
+            for (int index = 0; index < players.Length; index++) //복사할 공개 참가자 정보
+                if (players[index] != null)
+                    state.players[index] = new AuctionState.Player
+                    {
+                        id = players[index].id, name = players[index].name, color = players[index].color,
+                        ready = players[index].ready, cash = economyComponent.getBalance(index)
+                    };
+            return state;
+        }
+
+        public void receiveState(AuctionState state) //이전 순번을 버리고 로컬 화면 갱신
+        {
+            if (state == null || state.version != 1 || state.sequence <= lastStateSequence || state.players == null ||
+                state.players.Length != 4 || state.localSlot < 0 || state.localSlot >= 4)
+                return;
+            for (int slot = 0; slot < state.players.Length; slot++) //Unity JSON의 빈 클래스 표현을 빈 좌석으로 복원
+                if (state.players[slot] != null && state.players[slot].id == 0)
+                    state.players[slot] = null;
+            if (state.players[state.localSlot] == null)
+                return;
+            lastStateSequence = state.sequence;
+            localState = state;
+            displayState();
+        }
+
+        private void displayState() //UI와 상품 연출에 수신자용 상태 전달
+        {
+            uiComponent.showState(localState, networkComponent.roomTitle + "  ·  " + networkComponent.roomName);
+            viewComponent.showState(localState);
+        }
+
+        public void leaveRoom() //사용자의 방 나가기 요청
+        {
+            connectionLost("방에서 나왔습니다.");
+        }
+
+        public async void connectionLost(string message) //접속을 정리하고 Home으로 복귀
+        {
+            if (returningHome || this == null)
+                return;
+            returningHome = true;
+            try
+            {
+                await networkComponent.disconnect();
+                if (this == null)
+                    return;
+                localState = null;
+                lastStateSequence = -1;
+                roundComponent.resetLobby();
+                AsyncOperation load = SceneManager.LoadSceneAsync("Home"); //Home 복귀 작업
+                while (load != null && !load.isDone)
+                    await System.Threading.Tasks.Task.Yield();
+                if (this != null)
+                {
+                    uiComponent.setBusy(false);
+                    uiComponent.showMessage(message);
+                }
+            }
+            finally
+            {
+                returningHome = false;
+                if (this != null && !Application.isBatchMode)
+                    refreshRooms();
+            }
+        }
+
+        private string cleanName(string value) //빈 이름과 표시 제어 문자를 정리
+        {
+            string result = new string((value ?? "").Where(character => !char.IsControl(character) && character != '<' && character != '>').ToArray()).Trim(); //정리한 표시 이름
+            return result.Length == 0 ? "플레이어" : result.Substring(0, Math.Min(12, result.Length));
+        }
+    }
+}

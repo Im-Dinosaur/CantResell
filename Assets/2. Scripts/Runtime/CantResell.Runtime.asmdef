@@ -1,0 +1,6 @@
+{
+  "name": "CantResell.Runtime",
+  "rootNamespace": "CantResell",
+  "references": ["Fusion.Unity", "Unity.InputSystem", "Unity.ugui", "PhotonVoice.Fusion", "PhotonVoice", "PhotonVoice.API", "Photon.Realtime"],
+  "autoReferenced": true
+}
