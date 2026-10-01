@@ -62,7 +62,13 @@ namespace CantResell
         private Button joinButton; //방 참가 버튼
         private Button readyButton; //준비 상태 변경 버튼
         private Button startButton; //게임 시작 버튼
-        private Button inspectButton; //검사권 사용 버튼
+        private Button endNightButton; //자신의 밤 행동 종료
+        private Image phaseBar; //상단 시간 막대
+        private Text objectiveLabel; //본인의 목표와 소지금
+        private Text inventoryLabel; //페이지별 보유 상품
+        private Text nightLabel; //밤 행동권과 이동 조작
+        private int inventoryPage; //보유 상품 목록 페이지
+        public bool worldInputBlocked => settingsOpen || modal != null || (bidInput != null && bidInput.isFocused); //메뉴 입력 중 이동 차단
         private Button bidButton; //입찰 요청 버튼
         private Button lobbyButton; //대기실 복귀 버튼
 
@@ -97,9 +103,13 @@ namespace CantResell
             sceneName = nextScene;
             state = null;
             Array.Clear(playerLabels, 0, playerLabels.Length);
-            readyButton = startButton = inspectButton = bidButton = lobbyButton = null;
+            readyButton = startButton = endNightButton = bidButton = lobbyButton = null;
             createButton = joinButton = null;
             secretLabel = bidLabel = phaseLabel = timerLabel = resultLabel = null;
+            phaseBar = null;
+            objectiveLabel = inventoryLabel = nightLabel = null;
+            inventoryPage = 0;
+            bidInput = null;
             roomRows = modal = null;
             roomListStatus = roomPageLabel = modalMessage = voiceLabel = null;
             microphoneButton = microphoneTestButton = null;
@@ -347,8 +357,8 @@ namespace CantResell
 
         private void buildVoiceControls(bool allowTest) //대기실과 게임에서 계속 사용할 음성 조작 영역
         {
-            RectTransform bar = createPanel(page, "VoiceControls", 58, 752, 1484, 59); //하단 음성 상태 표시줄
-            voiceLabel = createText(bar, "음성 연결 대기 중", 16, 13, allowTest ? 600 : 1030, 38, 19);
+            RectTransform bar = createPanel(page, "VoiceControls", allowTest ? 58 : 425, allowTest ? 752 : 820, allowTest ? 1484 : 650, allowTest ? 59 : 44); //밤 행동 버튼과 겹치지 않는 음성 표시줄
+            voiceLabel = createText(bar, "음성 연결 대기 중", 16, allowTest ? 13 : 4, allowTest ? 600 : 395, 38, allowTest ? 19 : 16);
             if (allowTest)
             {
                 RectTransform track = createPanel(bar, "MicrophoneTrack", 675, 23, 196, 12); //마이크 입력 크기 배경
@@ -358,7 +368,7 @@ namespace CantResell
                 microphoneTestButton = createButtonAt(bar, "마이크 테스트", 906, 8, 244, 43, game.toggleMicrophoneTest, false);
                 microphoneTestButton.GetComponentInChildren<Text>().fontSize = 19;
             }
-            microphoneButton = createButtonAt(bar, "마이크 켜기", 1180, 8, 286, 43, game.toggleMicrophone, false);
+            microphoneButton = createButtonAt(bar, "마이크 켜기", allowTest ? 1180 : 430, allowTest ? 8 : 4, allowTest ? 286 : 204, allowTest ? 43 : 36, game.toggleMicrophone, false);
             microphoneButton.GetComponentInChildren<Text>().fontSize = 19;
         }
 
@@ -370,22 +380,62 @@ namespace CantResell
                 playerLabels[slot] = createText(panel, "빈 자리", 24, 95 + slot * 132, 307, 115, 23);
         }
 
-        private void buildPlay() //경매 정보와 개인 행동 화면 구성
+        private void buildPlay() //공개 도감과 오른쪽 개인 목표 및 보유품 구성
         {
-            buildPlayerList();
-            RectTransform panel = createPanel(page, "AuctionControls", 1130, 120, 410, 655); //게임 조작 패널
-            phaseLabel = createText(panel, "입장 중", 26, 22, 280, 45, 29);
-            timerLabel = createText(panel, "", 310, 24, 77, 45, 28, accentColor);
-            secretLabel = createText(panel, "상품: 토스터\n상태: 알 수 없음", 26, 87, 358, 100, 25);
-            bidLabel = createText(panel, "입찰을 기다리고 있습니다.", 26, 210, 358, 103, 23);
-            inspectButton = createButtonAt(panel, "비밀 검사", 26, 331, 358, 55, game.requestInspection);
-            bidInput = createInput(panel, "10", 26, 405, 180, true);
-            bidButton = createButtonAt(panel, "입찰하기", 219, 405, 165, 56, submitBid);
-            resultLabel = createText(panel, "", 26, 324, 358, 235, 23);
+            noticeLabel.rectTransform.anchoredPosition = new Vector2(425, -143);
+            noticeLabel.rectTransform.sizeDelta = new Vector2(650, 68);
+            noticeLabel.fontSize = 18;
+            RectTransform catalogPanel = createPanel(page, "AuctionCatalog", 40, 105, 325, 700); //모든 경매 상품 공개 도감
+            createText(catalogPanel, "집들이 경매 · 상품 도감", 18, 16, 290, 36, 24, accentColor);
+            int row = 0; //상품 표시 행
+            foreach (AuctionItemComponent.Definition item in game.catalog) //경매에 등장할 전체 상품 종류
+            {
+                createText(catalogPanel, AuctionItemComponent.itemName(item.kind) + " · " + item.description, 18, 66 + row++ * 33, 289, 32, 16);
+            }
+            for (int slot = 0; slot < 4; slot++) //낮의 참가자와 잔액 표시
+                playerLabels[slot] = createText(catalogPanel, "", 18, 523 + slot * 43, 289, 42, 15);
+            createPanel(page, "PhaseTrack", 425, 115, 650, 18);
+            RectTransform fill = createRect(page, "PhaseTimeBar", 425, 115, 650, 18); //남은 시간을 채울 막대
+            phaseBar = fill.gameObject.AddComponent<Image>();
+            phaseBar.color = accentColor;
+            phaseBar.type = Image.Type.Filled;
+            phaseBar.fillMethod = Image.FillMethod.Horizontal;
+            phaseBar.raycastTarget = false;
+            phaseLabel = createText(page, "입장 중", 425, 58, 565, 43, 25);
+            timerLabel = createText(page, "", 990, 60, 85, 40, 24, accentColor);
+            RectTransform panel = createPanel(page, "AuctionControls", 1125, 105, 435, 700); //오른쪽 목표 사각형
+            objectiveLabel = createText(panel, "", 22, 16, 391, 200, 20, accentColor);
+            secretLabel = createText(panel, "", 22, 224, 391, 72, 20);
+            bidLabel = createText(panel, "", 22, 305, 391, 63, 18);
+            bidInput = createInput(panel, "10", 22, 373, 192, true);
+            bidButton = createButtonAt(panel, "입찰하기", 230, 373, 182, 56, submitBid);
+            createText(panel, "내 보유품 · 원가/상태는 나만 확인", 22, 448, 391, 32, 18);
+            inventoryLabel = createText(panel, "", 22, 484, 391, 146, 16);
+            createButtonAt(panel, "이전", 22, 638, 112, 39, () => { inventoryPage = Mathf.Max(0, inventoryPage - 1); refreshInventory(); }, false);
+            createButtonAt(panel, "다음", 147, 638, 112, 39, () => { inventoryPage++; refreshInventory(); }, false);
+            nightLabel = createText(page, "", 425, 653, 650, 100, 21);
+            endNightButton = createButtonAt(page, "이번 밤 행동 마치기", 610, 754, 285, 48, game.requestEndNightTurn, false);
+            endNightButton.gameObject.SetActive(false);
+            resultLabel = createText(page, "", 425, 240, 650, 350, 24);
             resultLabel.gameObject.SetActive(false);
-            lobbyButton = createButtonAt(panel, "대기실로 돌아가기", 26, 580, 358, 51, game.requestLobby, false);
+            lobbyButton = createButtonAt(page, "대기실로 돌아가기", 610, 608, 285, 51, game.requestLobby, false);
             lobbyButton.gameObject.SetActive(false);
-            inspectButton.interactable = bidButton.interactable = bidInput.interactable = false;
+            bidButton.interactable = bidInput.interactable = false;
+        }
+
+        private void refreshInventory() //원가와 상태 권한을 적용한 본인 상품 페이지
+        {
+            if (inventoryLabel == null || state == null)
+                return;
+            AuctionState.Item[] own = state.items.Where(item => item.owner == state.localSlot &&
+                (item.status == AuctionState.ItemStatus.Stored || item.status == AuctionState.ItemStatus.Carried)).ToArray(); //본인에게 귀속된 상품
+            int pages = Mathf.Max(1, (own.Length + 5) / 6); //여섯 개씩 표시할 페이지 수
+            inventoryPage = Mathf.Clamp(inventoryPage, 0, pages - 1);
+            inventoryLabel.text = own.Length == 0 ? "아직 보유한 상품이 없습니다." :
+                string.Join("\n", own.Skip(inventoryPage * 6).Take(6).Select(item => "#" + item.id + " " +
+                    AuctionItemComponent.itemName(item.kind) + " · " + (item.status == AuctionState.ItemStatus.Carried ? "도난 운반 중" :
+                    item.known ? item.cost + "원가 / " + AuctionItemComponent.conditionName(item.condition) : "원가·상태 미공개"))) +
+                "\n" + (inventoryPage + 1) + "/" + pages + " 페이지";
         }
 
         private void submitBid() //정수 금액을 확인하고 입찰 요청
@@ -431,34 +481,41 @@ namespace CantResell
             }
             if (phaseLabel == null)
                 return;
-            phaseLabel.text = (state.round + 1) + "/4 · " + phaseName(state.phase);
-            secretLabel.text = "상품: 토스터\n" + (state.knowsCondition ? (state.goodCondition ? "정상 제품" : "불량 제품") : "상태: 알 수 없음") +
-                (state.knowsCondition && !state.isRevealed() ? " · 나만 확인" : "");
-            bidLabel.text = "최고 입찰  " + state.highestBid + " 코인\n" +
-                (state.bidderSlot >= 0 && state.players[state.bidderSlot] != null ? state.players[state.bidderSlot].name : "입찰자 없음") +
-                "\n정상 보상  " + state.normalReward + " 코인";
-            inspectButton.interactable = state.phase == AuctionState.Phase.Inspection && state.localSlot != state.sellerSlot && !state.inspected && state.inspectionTickets > 0;
-            inspectButton.GetComponentInChildren<Text>().text = "비밀 검사 · " + state.inspectionTickets + "회 남음";
-            int nextMinimum = state.highestBid + state.minimumRaise; //다음 입찰의 최소 금액
+            bool night = state.phase == AuctionState.Phase.Night; //현재 밤 단계
+            bool ended = state.phase == AuctionState.Phase.Results || state.phase == AuctionState.Phase.Aborted; //종료 단계
+            phaseLabel.text = (state.round / 4 + 1) + "/" + state.cycles + " 회차 · " + phaseName(state.phase);
+            objectiveLabel.text = "나의 목표: " + state.goalTitle + "   " + state.players[state.localSlot].cash + " 코인\n" +
+                state.goalDescription + "\n확인 점수 " + state.goalScore + "/100" +
+                (state.unknownItems > 0 ? " · 미확인 " + state.unknownItems + "개" : "");
+            AuctionState.Item lot = state.items.FirstOrDefault(item => item.id == state.lotId); //수신자의 경매품 정보
+            secretLabel.text = lot == null || night || ended ? "" : AuctionItemComponent.itemName(lot.kind) + "\n" +
+                (lot.known ? "원가 " + lot.cost + " · " + AuctionItemComponent.conditionName(lot.condition) : "원가·상태: 알 수 없음");
+            bidLabel.text = night ? "도둑질한 상품은 귀가에 성공해야 내 것이 됩니다." : ended ? "" :
+                "최고 입찰 " + state.highestBid + " 코인\n" + (state.bidderSlot >= 0 ? state.players[state.bidderSlot]?.name : "입찰자 없음") +
+                " · 판매자 " + state.players[state.sellerSlot]?.name;
+            int nextMinimum = state.highestBid <= int.MaxValue - state.minimumRaise ? state.highestBid + state.minimumRaise : int.MaxValue; //다음 최소 입찰
             bidButton.interactable = state.phase == AuctionState.Phase.Bidding && state.localSlot != state.sellerSlot && state.players[state.localSlot].cash >= nextMinimum;
             bidInput.interactable = bidButton.interactable;
             if (!bidInput.isFocused)
                 bidInput.SetTextWithoutNotify(nextMinimum.ToString());
-            bool ended = state.phase == AuctionState.Phase.Results || state.phase == AuctionState.Phase.Aborted; //종료 화면 여부
-            inspectButton.gameObject.SetActive(!ended);
-            bidButton.gameObject.SetActive(!ended);
-            bidInput.gameObject.SetActive(!ended);
+            bidButton.gameObject.SetActive(!ended && !night);
+            bidInput.gameObject.SetActive(!ended && !night);
+            endNightButton.gameObject.SetActive(night);
+            endNightButton.interactable = night && state.localSlot == state.activeIntruder;
+            nightLabel.gameObject.SetActive(night);
             resultLabel.gameObject.SetActive(ended);
             lobbyButton.gameObject.SetActive(ended);
             lobbyButton.interactable = state.localSlot == state.hostSlot;
             if (ended)
                 resultLabel.text = state.phase == AuctionState.Phase.Aborted ? "게임이 중단되었습니다.\n방장이 대기실로 돌아갈 수 있습니다." : createRanking();
+            refreshInventory();
         }
+
 
         private string createRanking() //동점 공동 순위를 포함한 최종 결과 작성
         {
-            AuctionState.Player[] ranked = state.players.Where(player => player != null).OrderByDescending(player => player.cash).ToArray(); //소지금순 참가자 목록
-            return string.Join("\n\n", ranked.Select(player => (1 + ranked.Count(other => other.cash > player.cash)) + "위  " + player.name + "  " + player.cash + " 코인"));
+            AuctionState.Player[] ranked = state.players.Where(player => player != null).OrderByDescending(player => player.score).ToArray(); //목표 점수순 참가자 목록
+            return string.Join("\n\n", ranked.Select(player => (1 + ranked.Count(other => other.score > player.score)) + "위  " + player.name + "  " + player.score + "점 · " + player.objective));
         }
 
         private void Update() //상태 수신 사이의 남은 시간을 부드럽게 표시
@@ -491,7 +548,20 @@ namespace CantResell
                 }
             }
             if (timerLabel != null && state != null)
-                timerLabel.text = state.secondsRemaining > 0 ? Mathf.CeilToInt(Mathf.Max(0, state.secondsRemaining - (float)(Time.realtimeSinceStartupAsDouble - receivedAt))) + "초" : "";
+            {
+                float remaining = Mathf.Max(0, state.secondsRemaining - (float)(Time.realtimeSinceStartupAsDouble - receivedAt)); //수신 이후 보정한 시간
+                timerLabel.text = state.secondsRemaining > 0 ? Mathf.CeilToInt(remaining) + "초" : "";
+                if (phaseBar != null)
+                {
+                    phaseBar.fillAmount = state.phaseDuration > 0 ? remaining / state.phaseDuration : 0;
+                    phaseBar.rectTransform.localScale = new Vector3(phaseBar.fillAmount, 1, 1);
+                }
+                if (nightLabel != null && state.phase == AuctionState.Phase.Night)
+                    nightLabel.text = "밤 행동 " + (state.nightTurn + 1) + "/4 · " +
+                        (state.activeIntruder == state.localSlot ? "내 침입 턴" : "자기 집 안에서 방어하세요") +
+                        "\nWASD 이동 · E 문 열기/물건 들기 · Q 내 문 잠금 · Space 망치\n체력 " +
+                        (game.localPlayer != null ? game.localPlayer.health : 100) + " · 물건을 들고 자기 집으로 귀가";
+            }
         }
 
         public void showMessage(string message) //사용자에게 현재 상황 안내
@@ -724,8 +794,8 @@ namespace CantResell
         {
             return phase switch
             {
-                AuctionState.Phase.Pitch => "판매 설명", AuctionState.Phase.Inspection => "비밀 검사",
-                AuctionState.Phase.Bidding => "입찰", AuctionState.Phase.Reveal => "시연 결과",
+                AuctionState.Phase.Pitch => "상품 설명",
+                AuctionState.Phase.Bidding => "경매 입찰", AuctionState.Phase.Night => "밤 · 정체 숨김",
                 AuctionState.Phase.Results => "최종 순위", AuctionState.Phase.Aborted => "중단", _ => "입장 중"
             };
         }

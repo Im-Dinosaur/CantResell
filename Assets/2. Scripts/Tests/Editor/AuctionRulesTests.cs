@@ -76,7 +76,7 @@ namespace CantResell.Tests
             item = root.AddComponent<AuctionItemComponent>();
             economy.resetMatch();
             item.resetMatch();
-            item.prepareItem();
+
         }
 
         [TearDown]
@@ -104,94 +104,202 @@ namespace CantResell.Tests
             Assert.AreEqual(1, bid.bidderSlot);
         }
 
-        [TestCase(true, 180)]
-        [TestCase(false, 60)]
-        public void settlePurchaseExactlyOnce(bool good, int buyerBalance) //정상 보상과 불량 손실 및 중복 정산 차단 검증
+        [Test]
+        public void purchaseConservesMoneyAndRejectsDuplicateSettlement() //낙찰 보상 제거와 중복 정산 차단
         {
-            Assert.IsTrue(economy.settleRound(0, 0, 1, 40, good));
-            Assert.AreEqual(140, economy.getBalance(0));
-            Assert.AreEqual(buyerBalance, economy.getBalance(1));
-            Assert.IsFalse(economy.settleRound(0, 0, 1, 40, good));
-            Assert.AreEqual(buyerBalance, economy.getBalance(1));
+            Assert.IsTrue(economy.settleRound(0, 0, 1, 40));
+            Assert.AreEqual(340, economy.getBalance(0));
+            Assert.AreEqual(260, economy.getBalance(1));
+            Assert.AreEqual(1200, Enumerable.Range(0, 4).Sum(economy.getBalance));
+            Assert.IsFalse(economy.settleRound(0, 0, 1, 40));
+            Assert.IsTrue(economy.settleRound(12, 0, 1, 40));
         }
 
         [Test]
-        public void unsoldItemDoesNotCreateMoney() //유찰 시 자금 변화가 없는지 검증
+        public void unsoldAndInvalidTradeCannotCreateMoney() //유찰과 잘못된 거래 처리
         {
-            Assert.IsTrue(economy.settleRound(0, 0, -1, 0, true));
-            Assert.AreEqual(400, Enumerable.Range(0, 4).Sum(economy.getBalance));
+            Assert.IsTrue(economy.settleRound(0, 0, -1, 0));
+            Assert.IsFalse(economy.settleRound(1, 0, 0, 40));
+            Assert.IsFalse(economy.settleRound(1, 0, 1, 301));
+            Assert.IsTrue(economy.settleRound(1, 0, 1, 30));
+            Assert.AreEqual(1200, Enumerable.Range(0, 4).Sum(economy.getBalance));
         }
 
         [Test]
-        public void invalidSettlementDoesNotConsumeRound() //잘못된 거래가 라운드를 잠그지 않는지 검증
+        public void catalogDrawsEveryKindBeforeRepeating() //도구를 포함한 도감의 무작위 순환
         {
-            Assert.IsFalse(economy.settleRound(0, 0, 0, 40, true));
-            Assert.IsFalse(economy.settleRound(0, 0, 1, 101, true));
-            Assert.IsTrue(economy.settleRound(0, 0, 1, 30, false));
+            AuctionState.Item[] draws = Enumerable.Range(1, 13).Select(id => item.createItem(id, 0)).ToArray(); //한 주머니의 추첨
+            Assert.AreEqual(13, draws.Select(value => value.kind).Distinct().Count());
+            Assert.IsTrue(draws.All(value => value.cost >= 20 && value.cost <= 120));
+            Assert.IsTrue(draws.All(value => value.condition == 0 || value.condition == 50 || value.condition == 100));
         }
 
         [Test]
-        public void inspectionIsPrivateAndLimitedAcrossRounds() //검사권 소모와 중복 검사 및 비밀 열람 권한 검증
+        public void onlySellerAndWinnerKnowTruthEvenAfterTheft() //낙찰자 이외의 추가 공개와 점수 누설 방지
         {
-            Assert.IsTrue(item.knowsCondition(0, 0, false));
-            Assert.IsFalse(item.knowsCondition(1, 0, false));
-            Assert.IsFalse(item.tryInspect(0, 0));
-            Assert.IsTrue(item.tryInspect(1, 0));
-            Assert.IsFalse(item.tryInspect(1, 0));
-            Assert.AreEqual(1, item.getTickets(1));
-            Assert.IsTrue(item.knowsCondition(1, 0, false));
-            Assert.IsFalse(item.knowsCondition(2, 0, false));
-            item.prepareItem();
-            Assert.IsFalse(item.knowsCondition(1, 0, false));
-            Assert.IsTrue(item.tryInspect(1, 0));
-            item.prepareItem();
-            Assert.IsFalse(item.tryInspect(1, 0));
-            Assert.IsTrue(item.knowsCondition(2, 0, true));
+            AuctionInventoryComponent inventory = root.AddComponent<AuctionInventoryComponent>(); //호스트 보유품
+            Assert.IsTrue(inventory.addStock(new AuctionState.Item { id = 1, owner = 0, kind = AuctionState.ItemKind.Lamp, cost = 73, condition = 50 }));
+            Assert.IsFalse(inventory.addStock(new AuctionState.Item { id = 1, owner = 2 }));
+            Assert.IsTrue(inventory.createSnapshot(0)[0].known);
+            Assert.AreEqual(0, inventory.createSnapshot(1)[0].cost);
+            Assert.IsFalse(inventory.settleLot(1, 0));
+            Assert.IsTrue(inventory.settleLot(1, 1));
+            Assert.AreEqual(73, inventory.createSnapshot(1)[0].cost);
+            Assert.AreEqual(50, inventory.createSnapshot(1)[0].condition);
+            Assert.IsFalse(inventory.createSnapshot(2)[0].known);
+            Assert.IsTrue(inventory.beginCarry(1, 2));
+            Assert.AreEqual(1, inventory.getItem(1).owner);
+            Assert.IsTrue(inventory.finishCarry(2, true));
+            Assert.AreEqual(2, inventory.getItem(1).owner);
+            Assert.IsFalse(inventory.createSnapshot(2)[0].known);
+            Assert.AreEqual(0, inventory.createSnapshot(2)[0].condition);
+            Assert.IsTrue(inventory.createSnapshot(0)[0].known);
+            Assert.IsTrue(inventory.createSnapshot(1)[0].known);
         }
 
         [Test]
-        public void phaseDeadlineUsesHostClock() //시간 배율과 무관한 단계 경계 검증
+        public void failedCarryReturnsItemWithoutDuplicateOrSelfTheft() //시간 초과와 제압 시 소유권 복구
         {
-            AuctionRoundComponent round = root.AddComponent<AuctionRoundComponent>(); //단계 검증 대상
-            round.beginRound(0, 100);
+            AuctionInventoryComponent inventory = root.AddComponent<AuctionInventoryComponent>(); //보유품 처리
+            inventory.addStock(new AuctionState.Item { id = 1, owner = 0 });
+            inventory.settleLot(1, 1);
+            inventory.addStock(new AuctionState.Item { id = 2, owner = 0 });
+            inventory.settleLot(2, 1);
+            Assert.IsFalse(inventory.beginCarry(1, 1));
+            Assert.IsTrue(inventory.beginCarry(1, 2));
+            Assert.IsFalse(inventory.beginCarry(2, 2));
+            Assert.IsFalse(inventory.beginCarry(1, 3));
+            Assert.IsTrue(inventory.finishCarry(2, false));
+            Assert.AreEqual(1, inventory.getItem(1).owner);
+            Assert.AreEqual(AuctionState.ItemStatus.Stored, inventory.getItem(1).status);
+            Assert.IsFalse(inventory.finishCarry(2, true));
+        }
+
+        [Test]
+        public void objectivesShareMaximumAndDoNotStackDuplicates() //돈과 무관한 동일 만점 및 최고 성능 집계
+        {
+            AuctionObjectiveComponent objective = root.AddComponent<AuctionObjectiveComponent>(); //목표 점수
+            objective.resetMatch();
+            Assert.AreEqual(4, Enumerable.Range(0, 4).Select(slot => objective.getGoal(slot).title).Distinct().Count());
+            for (int slot = 0; slot < 4; slot++) //각 목표의 동일 만점
+            {
+                AuctionObjectiveComponent.Goal goal = objective.getGoal(slot); //해당 목표
+                AuctionState.Item[] owned =
+                {
+                    new AuctionState.Item { owner = slot, kind = goal.core, condition = 100, status = AuctionState.ItemStatus.Stored },
+                    new AuctionState.Item { owner = slot, kind = goal.core, condition = 50, status = AuctionState.ItemStatus.Stored },
+                    new AuctionState.Item { owner = slot, kind = goal.support, condition = 100, status = AuctionState.ItemStatus.Stored },
+                    new AuctionState.Item { owner = slot, kind = goal.decoration, condition = 100, status = AuctionState.ItemStatus.Stored }
+                }; //중복 핵심 상품을 가진 집
+                Assert.AreEqual(100, objective.calculateScore(slot, owned));
+                owned[0].condition = 0;
+                Assert.AreEqual(75, objective.calculateScore(slot, owned));
+                owned[2].status = AuctionState.ItemStatus.Carried;
+                Assert.AreEqual(45, objective.calculateScore(slot, owned));
+            }
+        }
+
+        [Test]
+        public void eachNightGivesExactlyOneRandomTurnPerPlayer() //무작위 순서의 중복과 행동권 경계
+        {
+            AuctionNightComponent night = root.AddComponent<AuctionNightComponent>(); //밤 진행
+            night.beginNight();
+            Assert.AreEqual(4, night.order.Distinct().Count());
+            for (int turn = 0; turn < 4; turn++) //네 참가자의 한 번씩 행동
+            {
+                Assert.AreEqual(turn, night.turn);
+                Assert.IsTrue(night.canLeaveHouse(night.order[turn]));
+                Assert.IsFalse(night.canLeaveHouse((night.order[turn] + 1) % 4));
+                Assert.AreEqual(turn < 3, night.nextTurn());
+            }
+            Assert.AreEqual(-1, night.activeSlot);
+            Assert.IsFalse(night.nextTurn());
+        }
+
+        [Test]
+        public void hostClockSupportsTwoAuctionPhasesAndRepeatedCycles() //판매자 회전과 설명 입찰 밤 시간 경계
+        {
+            AuctionRoundComponent round = root.AddComponent<AuctionRoundComponent>(); //게임 단계
+            round.beginRound(4, 100);
+            Assert.AreEqual(0, round.sellerSlot);
             Assert.IsFalse(round.hasExpired(119.99));
             Assert.IsTrue(round.hasExpired(120));
-            round.enterPhase(AuctionState.Phase.Inspection, 120);
-            Assert.IsFalse(round.hasExpired(120));
-            Assert.AreEqual(15, round.getRemaining(120));
+            round.enterPhase(AuctionState.Phase.Bidding, 120);
+            Assert.AreEqual(25, round.getRemaining(120));
+            round.enterPhase(AuctionState.Phase.Night, 145);
+            Assert.AreEqual(45, round.getRemaining(145));
             round.enterPhase(AuctionState.Phase.Results, 200);
             Assert.IsFalse(round.hasExpired(999));
         }
 
         [Test]
-        public void snapshotDoesNotSerializeUnrevealedConditionForOtherPlayers() //전송되는 상태에도 비밀 정보가 빠지는지 검증
+        public void realSnapshotHidesOtherGoalsAndNightIdentity() //실제 전송 생성 경로에서 목표와 밤 정체 보호
         {
-            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CantResell.Editor.AuctionProjectSetup.prefabPath); //실제 진입점 프리팹
-            GameObject testGame = Object.Instantiate(prefab); //연결된 구성 요소를 가진 검증 인스턴스
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CantResell.Editor.AuctionProjectSetup.prefabPath); //실제 게임 프리팹
+            GameObject testGame = Object.Instantiate(prefab); //전송 검증 대상
             try
             {
-                AuctionItemComponent targetItem = testGame.GetComponent<AuctionItemComponent>(); //호스트 상품 상태
-                SerializedObject settings = new SerializedObject(targetItem); //정상 상품을 강제할 검증 설정
-                settings.FindProperty("normalChance").floatValue = 1;
-                settings.ApplyModifiedPropertiesWithoutUndo();
-                targetItem.resetMatch();
-                targetItem.prepareItem();
+                AuctionGame game = testGame.GetComponent<AuctionGame>(); //게임 진입점
+                AuctionState.Player[] participants = (AuctionState.Player[])typeof(AuctionGame).GetField("players", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(game); //호스트 참가자
+                for (int slot = 0; slot < 4; slot++)
+                    participants[slot] = new AuctionState.Player { id = slot + 1, name = "비밀닉네임" + slot, color = slot };
+                testGame.GetComponent<AuctionInventoryComponent>().addStock(new AuctionState.Item { id = 1, owner = 0, cost = 73, condition = 100 });
                 testGame.GetComponent<AuctionRoundComponent>().beginRound(0, 0);
-                MethodInfo createState = typeof(AuctionGame).GetMethod("createState", BindingFlags.Instance | BindingFlags.NonPublic); //실제 직렬화 직전 상태 생성 함수
-                AuctionState buyer = (AuctionState)createState.Invoke(testGame.GetComponent<AuctionGame>(), new object[] { 1, "" }); //검사하지 않은 구매자의 전송 상태
-                Assert.IsFalse(buyer.knowsCondition);
-                Assert.IsFalse(buyer.goodCondition);
-                AuctionState seller = (AuctionState)createState.Invoke(testGame.GetComponent<AuctionGame>(), new object[] { 0, "" }); //판매자의 전송 상태
-                Assert.IsTrue(seller.knowsCondition);
-                Assert.IsTrue(seller.goodCondition);
-                Assert.IsTrue(targetItem.tryInspect(1, 0));
-                buyer = (AuctionState)createState.Invoke(testGame.GetComponent<AuctionGame>(), new object[] { 1, "" });
-                Assert.IsTrue(buyer.goodCondition);
+                MethodInfo createState = typeof(AuctionGame).GetMethod("createState", BindingFlags.Instance | BindingFlags.NonPublic); //실제 전송 복사
+                AuctionState buyer = (AuctionState)createState.Invoke(game, new object[] { 1, "" }); //아직 낙찰하지 않은 구매자
+                Assert.IsFalse(buyer.items[0].known);
+                Assert.AreEqual(0, buyer.items[0].cost);
+                Assert.IsTrue(buyer.players.All(value => value.score == -1 && value.objective == ""));
+                testGame.GetComponent<AuctionRoundComponent>().enterPhase(AuctionState.Phase.Night, 0);
+                AuctionState night = JsonUtility.FromJson<AuctionState>(JsonUtility.ToJson(createState.Invoke(game, new object[] { 1, "" }))); //네트워크의 밤 복사본
+                Assert.IsTrue(night.players.All(value => !value.name.Contains("비밀닉네임") && value.color == 0));
+                testGame.GetComponent<AuctionRoundComponent>().enterPhase(AuctionState.Phase.Results, 0);
+                AuctionState result = (AuctionState)createState.Invoke(game, new object[] { 1, "" });
+                Assert.IsTrue(result.players.All(value => value.score >= 0 && !string.IsNullOrEmpty(value.objective)));
+                Assert.IsFalse(result.items[0].known);
             }
-            finally
+            finally { Object.DestroyImmediate(testGame); }
+        }
+
+
+        [Test]
+        public void completeThreeCyclesThroughTheRealCoordinator() //실제 파사드의 열두 거래와 세 번의 밤 및 결과 전환
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CantResell.Editor.AuctionProjectSetup.prefabPath); //실제 게임 구성
+            GameObject testGame = Object.Instantiate(prefab); //호스트 진행 검증 대상
+            try
             {
-                Object.DestroyImmediate(testGame);
+                AuctionGame game = testGame.GetComponent<AuctionGame>(); //단계 조율 파사드
+                AuctionRoundComponent round = testGame.GetComponent<AuctionRoundComponent>(); //현재 단계
+                AuctionEconomyComponent economy = testGame.GetComponent<AuctionEconomyComponent>(); //실제 거래
+                economy.resetMatch();
+                testGame.GetComponent<AuctionItemComponent>().resetMatch();
+                MethodInfo begin = typeof(AuctionGame).GetMethod("beginRound", BindingFlags.Instance | BindingFlags.NonPublic); //판매 시작
+                MethodInfo advance = typeof(AuctionGame).GetMethod("advancePhase", BindingFlags.Instance | BindingFlags.NonPublic); //시간 만료 처리
+                begin.Invoke(game, new object[] { 0, 100d });
+                double now = 100; //단계 전환 검증 시각
+                for (int cycle = 0; cycle < 3; cycle++) //승인한 다회차 진행
+                {
+                    for (int seller = 0; seller < 4; seller++) //모든 참가자의 판매 턴
+                    {
+                        Assert.AreEqual(cycle * 4 + seller, round.round);
+                        Assert.AreEqual(AuctionState.Phase.Pitch, round.phase);
+                        advance.Invoke(game, new object[] { now += 20 });
+                        Assert.AreEqual(AuctionState.Phase.Bidding, round.phase);
+                        int buyer = (seller + 1) % 4; //판매자 이외의 낙찰자
+                        Assert.IsTrue(testGame.GetComponent<AuctionBidComponent>().tryBid(buyer, seller, economy.getBalance(buyer), 10));
+                        advance.Invoke(game, new object[] { now += 25 });
+                    }
+                    Assert.AreEqual(AuctionState.Phase.Night, round.phase);
+                    Assert.AreEqual(4, testGame.GetComponent<AuctionNightComponent>().order.Distinct().Count());
+                    for (int turn = 0; turn < 4; turn++) //모든 밤 행동 완료
+                        advance.Invoke(game, new object[] { now += 45 });
+                }
+                Assert.AreEqual(AuctionState.Phase.Results, round.phase);
+                Assert.AreEqual(12, testGame.GetComponent<AuctionInventoryComponent>().allItems.Count());
+                Assert.AreEqual(1200, Enumerable.Range(0, 4).Sum(economy.getBalance));
             }
+            finally { Object.DestroyImmediate(testGame); }
         }
 
         [TestCase("Home")]
@@ -206,7 +314,7 @@ namespace CantResell.Tests
                 AuctionGame[] facades = scene.GetRootGameObjects().SelectMany(value => value.GetComponentsInChildren<AuctionGame>()).ToArray(); //씬에 연결된 진입점 목록
                 Assert.AreEqual(1, facades.Length);
                 SerializedObject settings = new SerializedObject(facades[0]); //저장된 구성 요소 참조
-                foreach (string field in new[] { "roundComponent", "itemComponent", "bidComponent", "economyComponent", "networkComponent", "uiComponent", "viewComponent", "voiceComponent", "settingsComponent", "audioComponent" }) //필수 연결 필드
+                foreach (string field in new[] { "roundComponent", "itemComponent", "bidComponent", "economyComponent", "networkComponent", "uiComponent", "viewComponent", "voiceComponent", "settingsComponent", "audioComponent", "inventoryComponent", "objectiveComponent", "nightComponent" }) //필수 연결 필드
                     Assert.IsNotNull(settings.FindProperty(field).objectReferenceValue, field);
                 Assert.AreEqual(1, scene.GetRootGameObjects().SelectMany(value => value.GetComponentsInChildren<Camera>()).Count());
             }

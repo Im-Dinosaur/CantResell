@@ -57,9 +57,15 @@ Assets와 모든 `.meta`, Packages, ProjectSettings, UserSettings, 루트 파일
 
 오프라인 테스트와 Windows 빌드는 실제 4인 Photon 온라인 플레이 검증을 대신하지 않는다.
 
-Git 원격 연결과 기존 브랜치는 유지했다. 이번 전환 변경은 로컬 작업 상태이며 커밋·푸시는 수행하지 않았다.
+Git 원격 연결과 기존 브랜치는 유지했다. 전환 이후 변경은 작업별 검증을 마친 뒤 커밋·푸시하여 관리한다.
 
 ## 참고
 
 - [Unity 6000.3.25f1 공식 릴리스](https://unity.com/releases/editor/whats-new/6000.3.25f1)
 - [Unity 6.3 Timeline 지원 버전](https://docs.unity3d.com/6000.3/Documentation/Manual/com.unity.timeline.html)
+
+## 2026-10-01 물리 충돌 설정 보완
+
+밤의 캐릭터 이동 검증에서 바닥과 벽 충돌이 적용되지 않는 문제를 확인했다. DynamicsManager.asset의 레이어 충돌 행렬이 6000.6의 형식 객체로 남아 있었으며, 6000.3에서 읽는 기존 16진수 저장 형식으로 정리했다. 원래의 충돌 허용 비트 값은 그대로 보존했다.
+
+기본 레이어의 실제 충돌 허용 여부를 확인하고 CharacterController가 바닥에 착지하며 집 벽을 통과하지 않는 PlayMode 검사를 통과했다. 결과는 Logs/Gameplay_Physics.xml과 Logs/Gameplay_Physics.log에 있다. Play 공간은 BoxCollider를 명시적으로 참조하고 문 개방에 따라 해당 충돌을 켜고 끈다.

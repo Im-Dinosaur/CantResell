@@ -16,6 +16,8 @@ namespace CantResell
         [SerializeField] private string lobbyScene = "StandBy"; //대기실 씬 이름
         [SerializeField] private string playScene = "Play"; //게임 씬 이름
         [SerializeField] private GameObject runnerPrefab; //음성 송수신 설정을 포함한 러너 프리팹
+        [SerializeField] private NetworkObject playerPrefab; //실제 이동하는 Fusion 캐릭터 프리팹
+        private readonly List<NetworkObject> spawnedPlayers = new List<NetworkObject>(); //호스트가 생성한 캐릭터
         private byte[] admissionToken; //방장이 입장 시 비교할 방별 인증 값
         private bool browsing; //방 목록 수신 중 여부
         public string roomTitle { get; private set; } = ""; //화면에 표시할 방 제목
@@ -61,7 +63,7 @@ namespace CantResell
         {
             using SHA256 hash = SHA256.Create(); //평문 비밀번호 대신 전달할 해시
             byte[] digest = hash.ComputeHash(Encoding.UTF8.GetBytes(code + ":" + (password ?? ""))); //방 식별자를 포함한 검증 값
-            return new byte[] { 3 }.Concat(digest).ToArray();
+            return new byte[] { 4 }.Concat(digest).ToArray();
         }
 
         public static bool acceptsToken(byte[] expected, byte[] received) //누락과 변조된 입장 요청 차단
@@ -80,7 +82,7 @@ namespace CantResell
             runnerObject.name = "AuctionRunner";
             DontDestroyOnLoad(runnerObject);
             runner = runnerObject.GetComponent<NetworkRunner>();
-            runner.ProvideInput = false;
+            runner.ProvideInput = true;
             runner.AddCallbacks(this);
         }
 
@@ -140,7 +142,7 @@ namespace CantResell
                     PlayerCount = 4,
                     IsVisible = true,
                     IsOpen = true,
-                    SessionProperties = host ? new Dictionary<string, SessionProperty> { { "v", 3 }, { "t", title }, { "p", locked ? 1 : 0 } } : null,
+                    SessionProperties = host ? new Dictionary<string, SessionProperty> { { "v", 4 }, { "t", title }, { "p", locked ? 1 : 0 } } : null,
                     ConnectionToken = admissionToken,
                     EnableClientSessionCreation = false,
                     Scene = sceneInfo,
@@ -194,6 +196,7 @@ namespace CantResell
                     Destroy(oldRunner.gameObject);
                 runner = null;
                 peers.Clear();
+                spawnedPlayers.Clear();
                 roomName = "";
                 roomTitle = "";
                 admissionToken = null;
@@ -240,9 +243,39 @@ namespace CantResell
             runner.LoadScene(SceneRef.FromIndex(sceneIndex), LoadSceneMode.Single);
         }
 
+        public void spawnPlayers(AuctionState.Player[] participants) //게임 씬 준비 후 입력 권한을 가진 캐릭터 생성
+        {
+            if (!isHost || playerPrefab == null || spawnedPlayers.Count > 0)
+                return;
+            for (int slot = 0; slot < participants.Length; slot++) //각 참가자의 실제 캐릭터
+            {
+                if (participants[slot] == null || !peers.TryGetValue(participants[slot].id, out PlayerRef peer))
+                    continue;
+                int assignedSlot = slot; //생성 콜백에 전달할 좌석
+                NetworkObject pawn = runner.Spawn(playerPrefab, new Vector3(slot * 2 - 3, 0, -3), Quaternion.identity, peer,
+                    (source, instance) =>
+                    {
+                        Player player = instance.GetComponent<Player>(); //캐릭터 기능 진입점
+                        player.slot = assignedSlot;
+                        player.health = 100;
+                    });
+                runner.SetPlayerObject(peer, pawn);
+                spawnedPlayers.Add(pawn);
+            }
+        }
+
+        public void clearPlayers() //대기실 복귀 전에 네트워크 캐릭터 정리
+        {
+            if (isHost)
+                foreach (NetworkObject pawn in spawnedPlayers) //게임에 생성한 캐릭터
+                    if (pawn != null && pawn.IsValid)
+                        runner.Despawn(pawn);
+            spawnedPlayers.Clear();
+        }
+
         private ReliableKey nextKey() //중복되지 않는 데이터 스트림 키 생성
         {
-            return ReliableKey.FromInts(protocolKey, 1, unchecked(++transferSequence), 0);
+            return ReliableKey.FromInts(protocolKey, 2, unchecked(++transferSequence), 0);
         }
 
         private int findScene(string sceneName) //씬 이름으로 빌드 인덱스 확인
@@ -255,10 +288,10 @@ namespace CantResell
 
         public void OnReliableDataReceived(NetworkRunner source, PlayerRef player, ReliableKey key, ReadOnlySpan<byte> data) //Fusion 2.1의 신뢰성 보장 메시지 수신
         {
-            if (source != runner || !isConnected || data.Length == 0 || data.Length > 8192)
+            if (source != runner || !isConnected || data.Length == 0 || data.Length > 32768)
                 return;
             key.GetInts(out int tag, out int version, out _, out _); //스트림의 프로토콜 식별 정보
-            if (tag != protocolKey || version != 1)
+            if (tag != protocolKey || version != 2)
                 return;
             try
             {
@@ -345,10 +378,11 @@ namespace CantResell
         public void OnConnectFailed(NetworkRunner source, NetAddress address, NetConnectFailedReason reason) //접속 실패 결과는 connect에서 처리
         {
         }
-        public void OnInput(NetworkRunner source, NetworkInput input) //턴 방식이므로 이동 입력 미사용
+        public void OnInput(NetworkRunner source, NetworkInput input) //실제 로컬 입력을 Fusion 틱으로 전송
         {
+            input.Set(game.readPlayerInput());
         }
-        public void OnInputMissing(NetworkRunner source, PlayerRef player, NetworkInput input) //턴 방식이므로 누락 입력 미사용
+        public void OnInputMissing(NetworkRunner source, PlayerRef player, NetworkInput input) //누락 입력은 캐릭터에서 정지 처리
         {
         }
 #pragma warning disable CS0618 //Fusion에서 유지하는 미사용 인터페이스 멤버
@@ -363,7 +397,7 @@ namespace CantResell
             List<Room> rooms = new List<Room>(); //이번 목록의 표시 항목
             foreach (SessionInfo session in sessions) //Photon에서 전달한 전체 방 목록
             {
-                if (!session.Properties.TryGetValue("v", out SessionProperty version) || !version.IsInt || (int)version != 3 ||
+                if (!session.Properties.TryGetValue("v", out SessionProperty version) || !version.IsInt || (int)version != 4 ||
                     !session.Properties.TryGetValue("t", out SessionProperty title) || !title.IsString ||
                     !session.Properties.TryGetValue("p", out SessionProperty password) || !password.IsInt)
                     continue;

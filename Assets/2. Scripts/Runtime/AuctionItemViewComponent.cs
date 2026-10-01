@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -13,19 +14,19 @@ namespace CantResell
         private GameObject roomRoot; //현재 씬의 테이블과 캐릭터 루트
         private readonly List<Material> materials = new List<Material>(); //생성한 머티리얼의 수명 관리
         private readonly Renderer[] characters = new Renderer[4]; //임시 캐릭터 렌더러
-        private Transform toaster; //시연할 토스터
-        private Transform toast; //정상 작동 때 튀어나올 식빵
-        private readonly Transform[] smoke = new Transform[6]; //불량 시연의 연기 표현
-        private Vector3 toasterPosition; //토스터의 기본 위치
-        private int shownMatch = -1; //시연 중인 게임 번호
-        private int shownRound = -1; //시연 중인 라운드 번호
-        private float revealAt; //시연 시작 시각
-        private bool revealing; //시연 재생 여부
-        private bool good; //전체 공개된 상품 상태
+        private readonly PlayerHouse[] houses = new PlayerHouse[4]; //밤의 충돌을 갖춘 집
+        private readonly Dictionary<int, GameObject> loot = new Dictionary<int, GameObject>(); //공개 보관품 표시
+        private GameObject lotVisual; //현재 판매품 표시
+        private Camera sceneCamera; //현재 씬의 카메라
+        private Light daylight; //낮과 밤에 밝기를 바꿀 조명
+        private float daylightIntensity; //원래 씬 조명 밝기
+        private AuctionState displayed; //로컬에 허용된 상태
+        private string currentScene; //구성한 씬 이름
 
         public void showScene(string sceneName) //기본 3D 방과 임시 상품 구성
         {
             clearRoom();
+            currentScene = sceneName;
             roomRoot = new GameObject("AuctionRoomView");
             Scene targetScene = SceneManager.GetSceneByName(sceneName); //전환 중 활성 씬과 구분할 표시 대상 씬
             Camera camera = null; //표시 대상 씬에 속한 카메라
@@ -39,6 +40,9 @@ namespace CantResell
                         break;
                 }
             }
+            sceneCamera = camera;
+            daylight = targetScene.IsValid() ? targetScene.GetRootGameObjects().SelectMany(root => root.GetComponentsInChildren<Light>()).FirstOrDefault(light => light.type == LightType.Directional) : null;
+            daylightIntensity = daylight != null ? daylight.intensity : 1;
             if (camera != null)
             {
                 camera.transform.position = sceneName == "StandBy" ? lobbyCameraPosition : sceneName == "Home" ? homeCameraPosition : new Vector3(0, 5.3f, -8.6f);
@@ -52,23 +56,58 @@ namespace CantResell
                 buildLounge(sceneName == "StandBy");
                 return;
             }
-            createShape("Floor", PrimitiveType.Cube, new Vector3(0, -0.2f, 0), new Vector3(14, 0.2f, 12), new Color(0.07f, 0.10f, 0.17f));
-            createShape("Table", PrimitiveType.Cylinder, new Vector3(0, 0.85f, 0.5f), new Vector3(3.8f, 0.12f, 2.8f), new Color(0.18f, 0.33f, 0.33f));
-            createShape("TableBase", PrimitiveType.Cylinder, new Vector3(0, 0.35f, 0.5f), new Vector3(0.6f, 0.4f, 0.6f), new Color(0.15f, 0.19f, 0.25f));
-            Vector3[] seats = { new Vector3(-2.3f, 0.9f, -0.3f), new Vector3(-1.7f, 0.9f, 2.5f), new Vector3(1.7f, 0.9f, 2.5f), new Vector3(2.3f, 0.9f, -0.3f) }; //테이블 주변 좌석 위치
-            for (int slot = 0; slot < 4; slot++) //임시 캐릭터 생성 번호
-                characters[slot] = createShape("Player" + (slot + 1), PrimitiveType.Capsule, seats[slot], new Vector3(0.52f, 0.66f, 0.52f), playerColors[slot]).GetComponent<Renderer>();
-            toasterPosition = new Vector3(0, 1.25f, 0.5f);
-            toaster = createShape("Toaster", PrimitiveType.Cube, toasterPosition, new Vector3(0.85f, 0.52f, 0.52f), new Color(0.83f, 0.85f, 0.91f)).transform;
-            createShape("ToasterSlot", PrimitiveType.Cube, new Vector3(0, 1.519f, 0.5f), new Vector3(0.6f, 0.02f, 0.17f), new Color(0.07f, 0.08f, 0.11f));
-            toast = createShape("Toast", PrimitiveType.Cube, new Vector3(0, 1.6f, 0.5f), new Vector3(0.48f, 0.4f, 0.12f), new Color(0.96f, 0.73f, 0.35f)).transform;
-            toast.gameObject.SetActive(false);
-            for (int index = 0; index < smoke.Length; index++) //불량 시연의 연기 조각 번호
-            {
-                smoke[index] = createShape("Smoke" + index, PrimitiveType.Sphere, toasterPosition, Vector3.one * 0.18f, new Color(0.3f, 0.32f, 0.38f)).transform;
-                smoke[index].gameObject.SetActive(false);
-            }
+            createShape("Floor", PrimitiveType.Cube, new Vector3(0, -0.15f, 0), new Vector3(38, 0.3f, 36), new Color(0.12f, 0.15f, 0.18f), true);
+            createShape("AuctionTable", PrimitiveType.Cylinder, new Vector3(0, 0.75f, 0), new Vector3(3.3f, 0.12f, 3.3f), new Color(0.36f, 0.19f, 0.08f), true);
+            lotVisual = createShape("AuctionLot", PrimitiveType.Cube, new Vector3(0, 1.35f, 0), Vector3.one * 0.65f, new Color(0.9f, 0.7f, 0.25f));
+            Vector3[] centers = { new Vector3(-8, 0, 9), new Vector3(8, 0, 9), new Vector3(-8, 0, -9), new Vector3(8, 0, -9) }; //중앙을 향한 네 집
+            for (int slot = 0; slot < 4; slot++) //좌석별 집
+                buildHouse(slot, centers[slot]);
+            createShape("BoundaryWest", PrimitiveType.Cube, new Vector3(-18, 1, 0), new Vector3(0.3f, 3, 36), Color.gray, true);
+            createShape("BoundaryEast", PrimitiveType.Cube, new Vector3(18, 1, 0), new Vector3(0.3f, 3, 36), Color.gray, true);
+            createShape("BoundaryNorth", PrimitiveType.Cube, new Vector3(0, 1, 17), new Vector3(36, 3, 0.3f), Color.gray, true);
+            createShape("BoundarySouth", PrimitiveType.Cube, new Vector3(0, 1, -17), new Vector3(36, 3, 0.3f), Color.gray, true);
+            Physics.SyncTransforms();
         }
+
+        private void buildHouse(int slot, Vector3 center) //문 틈과 실제 벽 충돌을 가진 집 구성
+        {
+            GameObject root = new GameObject("House" + (slot + 1)); //집의 기능 진입점
+            root.transform.SetParent(roomRoot.transform, false);
+            root.transform.position = center;
+            float front = center.z > 0 ? -3 : 3; //중앙 경매장을 향한 문
+            Color color = new Color(0.25f, 0.24f, 0.27f); //밤에 동일하게 보이는 벽 색상
+            createShape("HouseFloor" + slot, PrimitiveType.Cube, center + Vector3.down * 0.03f, new Vector3(6, 0.05f, 6), new Color(0.3f, 0.21f, 0.14f));
+            createShape("HouseBack" + slot, PrimitiveType.Cube, center + new Vector3(0, 1.1f, -front), new Vector3(6.2f, 2.2f, 0.2f), color, true);
+            for (int side = -1; side <= 1; side += 2) //양쪽 벽과 출입문 옆
+            {
+                createShape("HouseSide" + slot + side, PrimitiveType.Cube, center + new Vector3(side * 3, 1.1f, 0), new Vector3(0.2f, 2.2f, 6), color, true);
+                createShape("HouseFront" + slot + side, PrimitiveType.Cube, center + new Vector3(side * 2, 1.1f, front), new Vector3(2, 2.2f, 0.2f), color, true);
+            }
+            GameObject panel = createShape("Door" + slot, PrimitiveType.Cube, center + new Vector3(0, 1, front), new Vector3(2, 2, 0.2f), new Color(0.42f, 0.3f, 0.18f), true); //출입문
+            HouseDoorComponent door = panel.AddComponent<HouseDoorComponent>(); //문의 충돌 담당
+            door.initialize(panel.GetComponent<Collider>(), panel.GetComponent<Renderer>());
+            houses[slot] = root.AddComponent<PlayerHouse>();
+            houses[slot].initialize(slot, door);
+        }
+
+        public PlayerHouse getHouse(int slot) //좌석에 대응하는 집 파사드 조회
+        {
+            return slot >= 0 && slot < houses.Length ? houses[slot] : null;
+        }
+
+        public Vector3 getSeatPosition(int slot) //낮 경매 테이블의 좌석
+        {
+            Vector3[] seats = { new Vector3(-3, 0, -1), new Vector3(-3, 0, 2), new Vector3(3, 0, 2), new Vector3(3, 0, -1) }; //실제 캐릭터 좌석
+            return seats[slot];
+        }
+
+        public Vector3 getItemPosition(AuctionState.Item item, IEnumerable<AuctionState.Item> items) //소유자의 집 안에서 일정한 상품 위치 계산
+        {
+            int index = items.Count(other => other.owner == item.owner && other.id < item.id &&
+                (other.status == AuctionState.ItemStatus.Stored || other.status == AuctionState.ItemStatus.Carried)); //운반 중에도 원래 위치 유지
+            return houses[item.owner].getStoragePosition(index);
+        }
+
 
         private void buildLounge(bool lobby) //테이블 메뉴와 참가자 정면 대기실의 임시 공간 구성
         {
@@ -143,60 +182,86 @@ namespace CantResell
             createShape("HatTop" + slot, PrimitiveType.Cylinder, position + Vector3.up * 3.4f, new Vector3(0.57f, 0.19f, 0.53f), new Color(0.15f, 0.10f, 0.06f));
         }
 
-        public void showState(AuctionState state) //공개 상태에 따라 캐릭터와 시연 갱신
+        public void showState(AuctionState state) //원가와 성능을 노출하지 않는 공개 공간 표시
         {
+            displayed = state;
             if (roomRoot == null)
                 return;
-            for (int slot = 0; slot < characters.Length; slot++) //캐릭터별 참가 및 색상 반영
+            for (int slot = 0; slot < characters.Length; slot++) //대기실 스킨 색상 반영
                 if (characters[slot] != null)
-                    characters[slot].sharedMaterial.color = state.players[slot] == null ? new Color(0.23f, 0.27f, 0.34f) : playerColors[Mathf.Clamp(state.players[slot].color, 0, playerColors.Length - 1)];
-            if (toast == null || !state.isRevealed())
+                    characters[slot].sharedMaterial.color = state.players[slot] == null ? Color.gray : playerColors[Mathf.Clamp(state.players[slot].color, 0, playerColors.Length - 1)];
+            if (currentScene != "Play")
+                return;
+            if (daylight != null)
+                daylight.intensity = state.phase == AuctionState.Phase.Night ? daylightIntensity * 0.28f : daylightIntensity;
+            for (int slot = 0; slot < houses.Length; slot++) //문 개방에 따른 충돌 갱신
+                houses[slot].showDoor(state.doorOpen[slot], state.doorStrength[slot]);
+            foreach (GameObject visual in loot.Values) //없어진 보관품 숨기기
+                visual.SetActive(false);
+            foreach (AuctionState.Item item in state.items) //보관 중인 공개 상품 형태
             {
-                resetReveal();
-                return;
+                if (item.status != AuctionState.ItemStatus.Stored)
+                    continue;
+                if (!loot.TryGetValue(item.id, out GameObject visual))
+                {
+                    visual = createShape("StoredItem_" + item.id, PrimitiveType.Cube, Vector3.zero, Vector3.one * 0.45f, new Color(0.66f, 0.58f, 0.39f));
+                    GameObject tag = new GameObject("ItemLabel", typeof(TextMesh)); //상품 종류를 알 수 있는 공개 이름표
+                    tag.transform.SetParent(visual.transform, false);
+                    tag.transform.localPosition = Vector3.up * 1.2f;
+                    TextMesh label = tag.GetComponent<TextMesh>(); //원가와 성능을 포함하지 않는 설명
+                    Font font = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "Arial" }, 32); //한글 표시 글꼴
+                    label.font = font;
+                    label.GetComponent<Renderer>().sharedMaterial = font.material;
+                    label.fontSize = 32;
+                    label.characterSize = 0.5f;
+                    label.anchor = TextAnchor.MiddleCenter;
+                    label.text = "#" + item.id + " " + AuctionItemComponent.itemName(item.kind);
+                    loot.Add(item.id, visual);
+                }
+                visual.transform.position = getItemPosition(item, state.items);
+                visual.SetActive(true);
             }
-            if (state.match == shownMatch && state.round == shownRound)
-                return;
-            shownMatch = state.match;
-            shownRound = state.round;
-            revealing = true;
-            revealAt = Time.unscaledTime;
-            good = state.goodCondition;
-            toast.gameObject.SetActive(good);
-            foreach (Transform puff in smoke) //불량일 때만 연기 표시
-                puff.gameObject.SetActive(!good);
+            lotVisual.SetActive(state.phase == AuctionState.Phase.Pitch || state.phase == AuctionState.Phase.Bidding);
         }
 
-        private void Update() //정상 식빵 튀기기와 불량 흔들림 연출
+        private void LateUpdate() //밤에는 자신의 캐릭터를 따라가는 카메라
         {
-            if (!revealing || toaster == null)
+            if (currentScene != "Play" || sceneCamera == null)
                 return;
-            float elapsed = Time.unscaledTime - revealAt; //시연 경과 시간
-            if (good)
+            foreach (GameObject item in loot.Values)
+                if (item.activeSelf && item.transform.childCount > 0)
+                    item.transform.GetChild(0).rotation = sceneCamera.transform.rotation;
+            Player local = AuctionGame.current?.localPlayer; //따라갈 로컬 캐릭터
+            if (displayed?.phase == AuctionState.Phase.Night && local != null)
             {
-                toast.position = new Vector3(0, 1.8f + Mathf.Abs(Mathf.Sin(elapsed * 2.5f)) * 0.65f, 0.5f);
-                toast.rotation = Quaternion.Euler(0, elapsed * 95, 0);
+                sceneCamera.transform.position = local.transform.position + new Vector3(0, 14, -9);
+                sceneCamera.transform.LookAt(local.transform.position + Vector3.up * 0.6f);
+                sceneCamera.fieldOfView = 48;
+                sceneCamera.backgroundColor = new Color(0.015f, 0.018f, 0.04f);
             }
             else
             {
-                toaster.position = toasterPosition + new Vector3(Mathf.Sin(elapsed * 60) * 0.06f, 0, 0);
-                for (int index = 0; index < smoke.Length; index++) //연기 조각의 상승 위치 계산
-                {
-                    float progress = Mathf.Repeat(elapsed * 0.55f + index / (float)smoke.Length, 1); //연기 조각의 반복 진행률
-                    smoke[index].position = toasterPosition + new Vector3(Mathf.Sin(index * 2.3f) * progress * 0.4f, 0.3f + progress * 1.5f, Mathf.Cos(index * 2.3f) * progress * 0.4f);
-                    smoke[index].localScale = Vector3.one * (0.12f + progress * 0.43f);
-                }
+                sceneCamera.transform.position = new Vector3(0, 8, -12);
+                sceneCamera.transform.LookAt(new Vector3(0, 0.8f, 0));
+                sceneCamera.fieldOfView = 46;
             }
         }
 
-        private GameObject createShape(string name, PrimitiveType type, Vector3 position, Vector3 scale, Color color) //시제품의 기본 3D 도형 생성
+        private GameObject createShape(string name, PrimitiveType type, Vector3 position, Vector3 scale, Color color, bool solid = false) //시제품의 기본 3D 도형 생성
         {
             GameObject shape = GameObject.CreatePrimitive(type); //생성한 도형
             shape.name = name;
             shape.transform.SetParent(roomRoot.transform, false);
             shape.transform.localPosition = position;
             shape.transform.localScale = scale;
-            Destroy(shape.GetComponent<Collider>());
+            Collider primitiveCollider = shape.GetComponent<Collider>(); //빌드에서 제거될 수 있는 기본 도형 충돌
+            if (primitiveCollider != null && (!solid || !(primitiveCollider is BoxCollider)))
+            {
+                primitiveCollider.enabled = false;
+                Destroy(primitiveCollider);
+            }
+            if (solid && !(primitiveCollider is BoxCollider))
+                shape.AddComponent<BoxCollider>();
             Material material = surfaceMaterial != null ? new Material(surfaceMaterial) : new Material(Shader.Find("Universal Render Pipeline/Lit")); //도형 전용 색상 머티리얼
             material.color = color;
             materials.Add(material);
@@ -204,27 +269,20 @@ namespace CantResell
             return shape;
         }
 
-        private void resetReveal() //라운드 사이에 공개 연출 초기화
+        private void clearRoom() //이전 공간의 충돌과 표시 자원 정리
         {
-            revealing = false;
-            shownMatch = shownRound = -1;
-            if (toaster != null)
-                toaster.position = toasterPosition;
-            if (toast != null)
-                toast.gameObject.SetActive(false);
-            foreach (Transform puff in smoke) //기존 연기 표시 종료
-                if (puff != null)
-                    puff.gameObject.SetActive(false);
-        }
-
-        private void clearRoom() //이전 씬의 임시 오브젝트와 머티리얼 정리
-        {
-            resetReveal();
             if (roomRoot != null)
+            {
+                roomRoot.SetActive(false);
                 Destroy(roomRoot);
-            foreach (Material material in materials) //동적으로 만든 머티리얼 해제
+            }
+            foreach (Material material in materials) //동적으로 만든 머티리얼
                 Destroy(material);
             materials.Clear();
+            loot.Clear();
+            System.Array.Clear(characters, 0, characters.Length);
+            System.Array.Clear(houses, 0, houses.Length);
+            displayed = null;
         }
 
         private void OnDestroy() //종료 시 생성 자원 정리

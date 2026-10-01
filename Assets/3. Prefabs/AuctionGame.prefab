@@ -278,6 +278,9 @@ GameObject:
   - component: {fileID: 6430905118178082002}
   - component: {fileID: 2523582438515223169}
   - component: {fileID: 1329293639429134452}
+  - component: {fileID: 3219488458410728951}
+  - component: {fileID: 5804519938857160001}
+  - component: {fileID: 3815472888115400236}
   m_Layer: 0
   m_Name: AuctionGame
   m_TagString: Untagged
@@ -312,12 +315,12 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 280005003c865814f9242a304220d665, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionRoundComponent
+  cyclesPerMatch: 3
   pitchSeconds: 20
-  inspectionSeconds: 15
   biddingSeconds: 25
-  revealSeconds: 8
+  nightSeconds: 45
 --- !u!114 &671118547509516656
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -328,10 +331,63 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1782dbdf203a3f84789f078fac7b18c8, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionItemComponent
-  normalChance: 0.5
-  ticketsPerMatch: 2
+  definitions:
+  - kind: 0
+    description: "\uD648 \uCE74\uD398\uC758 \uD575\uC2EC"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 1
+    description: "\uD648 \uCE74\uD398\uC758 \uBCF4\uC870"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 2
+    description: "\uBAA8\uB4E0 \uBC29\uC758 \uC7A5\uC2DD"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 3
+    description: "\uC74C\uC545\uBC29\uC758 \uD575\uC2EC"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 4
+    description: "\uC74C\uC545\uBC29\uC758 \uBCF4\uC870"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 5
+    description: "\uC791\uC5C5\uC2E4\uC758 \uD575\uC2EC"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 6
+    description: "\uC791\uC5C5\uC2E4\uC758 \uBCF4\uC870"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 7
+    description: "\uC791\uC5C5\uC2E4\uC758 \uC7A5\uC2DD"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 8
+    description: "\uD3B8\uC548\uD55C \uBC29\uC758 \uD575\uC2EC"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 9
+    description: "\uD3B8\uC548\uD55C \uBC29\uC758 \uBCF4\uC870"
+    minimumCost: 35
+    maximumCost: 120
+  - kind: 10
+    description: "\uBC24\uC5D0 \uBB38\uC744 \uC7A0\uAE08"
+    minimumCost: 20
+    maximumCost: 65
+  - kind: 11
+    description: "\uAC00\uAE4C\uC6B4 \uCE68\uC785\uC790 \uBC29\uC5B4"
+    minimumCost: 20
+    maximumCost: 65
+  - kind: 12
+    description: "\uC0C1\uB300\uC758 \uC790\uBB3C\uC1E0 \uD30C\uAD34"
+    minimumCost: 20
+    maximumCost: 65
+  normalChance: 0.65
+  wornChance: 0.25
 --- !u!114 &374162094889367042
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -342,7 +398,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 16d011a7aa3d8614fb7903683903af78, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionBidComponent
   minimumRaise: 10
 --- !u!114 &7621971672103164427
@@ -355,10 +411,9 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 548e1971d6433214b9848451385e9b0e, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionEconomyComponent
-  startingCash: 100
-  normalReward: 120
+  startingCash: 300
 --- !u!114 &6638640934997669537
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -369,11 +424,12 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: fbec36db989f4e840945ab07707b8bad, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionNetworkComponent
   lobbyScene: StandBy
   playScene: Play
   runnerPrefab: {fileID: 7530881776506737807, guid: f1cdc158f70511143b5e3dee05674862, type: 3}
+  playerPrefab: {fileID: 4031669808100734982, guid: 260a155b3d5fa234d8870e52f53b8af7, type: 3}
 --- !u!114 &4434889191718927681
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -384,7 +440,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 533096f3395de614dbc8e76335e672dc, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionUIComponent
   panelColor: {r: 0.07, g: 0.047, b: 0.031, a: 0.94}
   accentColor: {r: 0.98, g: 0.65, b: 0.24, a: 1}
@@ -398,7 +454,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 46b6c4fdc87120a4c9a9a9fadaa33fd7, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionItemViewComponent
   surfaceMaterial: {fileID: 2100000, guid: deb73bfe5c75acf46beb317ac84a92b5, type: 2}
   homeCameraPosition: {x: 0, y: 5.8, z: -8.6}
@@ -418,7 +474,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 8448d6e1144673c4794652649f8076ab, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionGame
   roundComponent: {fileID: 269250867739623796}
   itemComponent: {fileID: 671118547509516656}
@@ -430,6 +486,9 @@ MonoBehaviour:
   voiceComponent: {fileID: 6430905118178082002}
   settingsComponent: {fileID: 2523582438515223169}
   audioComponent: {fileID: 1329293639429134452}
+  inventoryComponent: {fileID: 3219488458410728951}
+  objectiveComponent: {fileID: 5804519938857160001}
+  nightComponent: {fileID: 3815472888115400236}
 --- !u!114 &6430905118178082002
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -470,3 +529,56 @@ MonoBehaviour:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionAudioComponent
   musicSource: {fileID: 6675701873864738124}
   effectsSource: {fileID: 4703164450359193939}
+--- !u!114 &3219488458410728951
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2aa610eaba34ae04bb6e8181c4ce488f, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionInventoryComponent
+--- !u!114 &5804519938857160001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: de7842fe65f1dc34086e044f13b25f86, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionObjectiveComponent
+  goals:
+  - title: "\uD648 \uCE74\uD398"
+    core: 0
+    support: 1
+    decoration: 2
+  - title: "\uC74C\uC545\uBC29"
+    core: 3
+    support: 4
+    decoration: 2
+  - title: "\uC791\uC5C5\uC2E4"
+    core: 5
+    support: 6
+    decoration: 7
+  - title: "\uD3B8\uC548\uD55C \uBC29"
+    core: 8
+    support: 9
+    decoration: 2
+--- !u!114 &3815472888115400236
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d049c0bf897da334290188e78136a7d6, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionNightComponent

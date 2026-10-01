@@ -1,6 +1,6 @@
 {
   "name": "CantResell.Editor",
-  "references": ["CantResell.Runtime", "UnityEditor.TestRunner", "Unity.ugui", "Fusion.Unity", "PhotonVoice.Fusion", "PhotonVoice", "PhotonVoice.API", "Photon.Realtime"],
+  "references": ["CantResell.Runtime", "UnityEditor.TestRunner", "Unity.ugui", "Fusion.Unity", "Fusion.Unity.Editor", "PhotonVoice.Fusion", "PhotonVoice", "PhotonVoice.API", "Photon.Realtime"],
   "includePlatforms": ["Editor"],
   "autoReferenced": true
 }

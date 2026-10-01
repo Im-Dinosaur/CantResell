@@ -9,15 +9,23 @@ namespace CantResell
     public sealed class AuctionGame : MonoBehaviour
     {
         [SerializeField] private AuctionRoundComponent roundComponent; //게임 단계와 시간 담당
-        [SerializeField] private AuctionItemComponent itemComponent; //상품 상태와 검사권 담당
+        [SerializeField] private AuctionItemComponent itemComponent; //상품 추첨 담당
         [SerializeField] private AuctionBidComponent bidComponent; //입찰 검증 담당
         [SerializeField] private AuctionEconomyComponent economyComponent; //자금과 정산 담당
         [SerializeField] private AuctionNetworkComponent networkComponent; //Fusion 연결과 메시지 담당
         [SerializeField] private AuctionUIComponent uiComponent; //메뉴와 게임 화면 담당
-        [SerializeField] private AuctionItemViewComponent viewComponent; //테이블과 상품 시연 담당
+        [SerializeField] private AuctionItemViewComponent viewComponent; //테이블과 집 공간 담당
         [SerializeField] private AuctionVoiceComponent voiceComponent; //방 음성 및 마이크 담당
         [SerializeField] private AuctionSettingsComponent settingsComponent; //음량과 화면 설정 저장 담당
         [SerializeField] private AuctionAudioComponent audioComponent; //음악과 효과음 재생 담당
+        [SerializeField] private AuctionInventoryComponent inventoryComponent; //상품 소유권과 비밀 담당
+        [SerializeField] private AuctionObjectiveComponent objectiveComponent; //개인 목표와 점수 담당
+        [SerializeField] private AuctionNightComponent nightComponent; //밤 행동 순서와 침입·방어 담당
+        private readonly Player[] pawns = new Player[4]; //실제 이동하는 네 캐릭터
+        public static AuctionGame current => instance; //네트워크 캐릭터가 사용하는 진입점
+        public AuctionState displayStateValue => localState; //로컬 화면과 캐릭터에 허용된 상태
+        public AuctionItemComponent.Definition[] catalog => itemComponent.catalog; //공개 상품 도감
+        public Player localPlayer => localState?.localSlot >= 0 ? pawns[localState.localSlot] : null; //본인의 이동 캐릭터
         public AuctionVoiceComponent voice => voiceComponent; //UI에 제공할 음성 상태
         public float masterVolume => settingsComponent.masterVolume; //설정창의 전체 음량
         public float musicVolume => settingsComponent.musicVolume; //설정창의 음악 음량
@@ -60,7 +68,7 @@ namespace CantResell
             }
             instance = this;
             if (roundComponent == null || itemComponent == null || bidComponent == null || economyComponent == null ||
-                networkComponent == null || uiComponent == null || viewComponent == null || voiceComponent == null || settingsComponent == null || audioComponent == null)
+                networkComponent == null || uiComponent == null || viewComponent == null || voiceComponent == null || settingsComponent == null || audioComponent == null || inventoryComponent == null || objectiveComponent == null || nightComponent == null)
             {
                 Debug.LogError("AuctionGame의 Component 참조를 모두 연결해 주세요.", this);
                 enabled = false;
@@ -73,6 +81,7 @@ namespace CantResell
             settingsComponent.initialize(restoreDisplay: !Application.isBatchMode);
             audioComponent.applyVolumes(masterVolume, musicVolume, effectsVolume);
             audioComponent.initialize();
+            nightComponent.initialize(inventoryComponent, viewComponent, pawns, publishState);
             networkComponent.initialize(this);
             uiComponent.initialize(this);
             SceneManager.sceneLoaded += onSceneLoaded;
@@ -315,9 +324,9 @@ namespace CantResell
             sendAction(AuctionState.Action.Start);
         }
 
-        public void requestInspection() //개인의 비밀 검사 요청
+        public void requestEndNightTurn() //본인의 밤 행동 종료 요청
         {
-            sendAction(AuctionState.Action.Inspect);
+            sendAction(AuctionState.Action.EndNightTurn);
         }
 
         public void requestBid(int amount) //원하는 금액의 입찰 요청
@@ -335,7 +344,7 @@ namespace CantResell
             networkComponent.sendCommand(new AuctionState.Command
             {
                 sequence = ++commandSequence, action = action, value = value, ready = ready,
-                name = nickname, match = localState?.match ?? match, round = localState?.round ?? 0
+                name = nickname, match = localState?.match ?? match, round = localState?.round ?? 0, nightTurn = localState?.nightTurn ?? -1
             });
         }
 
@@ -371,7 +380,7 @@ namespace CantResell
         {
             int slot = findSlot(playerId); //네트워크 송신자로 확인한 좌석
             double now = Time.realtimeSinceStartupAsDouble; //요청을 받은 호스트 시각
-            if (!networkComponent.isHost || command == null || command.version != 1 || slot < 0 ||
+            if (!networkComponent.isHost || command == null || command.version != 2 || slot < 0 ||
                 command.sequence <= receivedCommands[slot] || now - commandTimes[slot] < 0.075)
                 return;
             receivedCommands[slot] = command.sequence;
@@ -398,6 +407,9 @@ namespace CantResell
                     match++;
                     Array.Clear(loaded, 0, loaded.Length);
                     itemComponent.resetMatch();
+                    inventoryComponent.resetMatch();
+                    objectiveComponent.resetMatch();
+                    nightComponent.resetMatch();
                     economyComponent.resetMatch();
                     bidComponent.resetBids();
                     roundComponent.enterPhase(AuctionState.Phase.Loading, now);
@@ -409,24 +421,29 @@ namespace CantResell
                 case AuctionState.Action.Loaded when sameRound && roundComponent.phase == AuctionState.Phase.Loading:
                     loaded[slot] = true;
                     if (loaded.All(value => value))
-                        beginRound(0, now);
-                    break;
-                case AuctionState.Action.Inspect when sameRound && roundComponent.phase == AuctionState.Phase.Inspection:
-                    if (!itemComponent.tryInspect(slot, roundComponent.round))
                     {
-                        reject(slot, "검사권이 없거나 이번 상품을 이미 확인했습니다.");
-                        return;
+                        networkComponent.spawnPlayers(players);
+                        beginRound(0, now);
                     }
                     break;
+
+
                 case AuctionState.Action.Bid when sameRound && roundComponent.phase == AuctionState.Phase.Bidding:
-                    if (!bidComponent.tryBid(slot, roundComponent.round, economyComponent.getBalance(slot), command.value))
+                    if (!bidComponent.tryBid(slot, roundComponent.sellerSlot, economyComponent.getBalance(slot), command.value))
                     {
                         reject(slot, "입찰 금액, 잔액 또는 판매자 여부를 확인해 주세요.");
                         return;
                     }
                     break;
+                case AuctionState.Action.EndNightTurn when sameRound && roundComponent.phase == AuctionState.Phase.Night &&
+                    slot == nightComponent.activeSlot && command.nightTurn == nightComponent.turn:
+                    finishNightTurn(now);
+                    return;
                 case AuctionState.Action.ReturnToLobby when playerId == networkComponent.localId &&
                     (roundComponent.phase == AuctionState.Phase.Results || roundComponent.phase == AuctionState.Phase.Aborted):
+                    networkComponent.clearPlayers();
+                    inventoryComponent.resetMatch();
+                    nightComponent.resetMatch();
                     roundComponent.resetLobby();
                     economyComponent.resetMatch();
                     bidComponent.resetBids();
@@ -445,60 +462,125 @@ namespace CantResell
             publishState();
         }
 
-        private void beginRound(int index, double now) //새 상품과 입찰을 준비하고 판매 시작
+        private void beginRound(int index, double now) //판매 턴마다 상품 하나를 발급하고 설명 시작
         {
-            itemComponent.prepareItem();
-            bidComponent.resetBids();
             roundComponent.beginRound(index, now);
-            notice = "판매자가 상품을 소개합니다. 설명은 진실일 수도, 거짓일 수도 있습니다.";
+            inventoryComponent.addStock(itemComponent.createItem(index + 1, roundComponent.sellerSlot));
+            bidComponent.resetBids();
+            for (int slot = 0; slot < pawns.Length; slot++) //낮의 경매 테이블 좌석
+                if (pawns[slot] != null)
+                    pawns[slot].resetPlayer(viewComponent.getSeatPosition(slot));
+            notice = "판매자가 상품을 소개합니다. 원가와 상태는 판매자만 알고 있습니다.";
         }
 
-        private void advancePhase(double now) //시간 만료 시 담당 구성 요소의 처리 순서 조율
+        private void advancePhase(double now) //낮 경매와 밤 턴의 전환 조율
         {
             switch (roundComponent.phase)
             {
                 case AuctionState.Phase.Loading:
-                    abortMatch("입장이 지연되어 게임을 시작하지 못했습니다. 대기실에서 다시 시도해 주세요.");
+                    abortMatch("입장이 지연되어 게임을 시작하지 못했습니다.");
                     return;
                 case AuctionState.Phase.Pitch:
-                    roundComponent.enterPhase(AuctionState.Phase.Inspection, now);
-                    notice = "검사권으로 상품 상태를 확인할 수 있습니다. 결과는 본인에게만 보입니다.";
-                    break;
-                case AuctionState.Phase.Inspection:
                     roundComponent.enterPhase(AuctionState.Phase.Bidding, now);
-                    notice = "가장 높은 금액을 제시한 사람이 낙찰받습니다.";
+                    notice = "목표에 필요한 물건에 입찰하세요. 낙찰자에게만 원가와 상태를 공개합니다.";
                     break;
                 case AuctionState.Phase.Bidding:
-                    if (!economyComponent.settleRound(roundComponent.round, roundComponent.round,
-                        bidComponent.bidderSlot, bidComponent.highestBid, itemComponent.getCondition()))
+                    AuctionState.Item lot = inventoryComponent.getItem(roundComponent.round + 1); //정산할 판매품
+                    if (lot == null || lot.status != AuctionState.ItemStatus.Stock ||
+                        !economyComponent.canSettle(roundComponent.round, roundComponent.sellerSlot, bidComponent.bidderSlot, bidComponent.highestBid))
                     {
                         abortMatch("정산 상태를 확인하지 못해 게임을 중단했습니다.");
                         return;
                     }
-                    roundComponent.enterPhase(AuctionState.Phase.Reveal, now);
-                    notice = bidComponent.bidderSlot < 0 ? "유찰! 거래 없이 상품 상태만 공개합니다." :
-                        itemComponent.getCondition() ? "정상 상품! 낙찰자에게 보상이 지급됐습니다." : "불량 상품! 환불은 없습니다.";
-                    break;
-                case AuctionState.Phase.Reveal:
-                    if (roundComponent.round >= 3)
-                    {
-                        roundComponent.enterPhase(AuctionState.Phase.Results, now);
-                        notice = "게임 종료! 소지금이 가장 많은 플레이어가 승리합니다. 동점은 공동 순위입니다.";
-                    }
-                    else
+                    inventoryComponent.settleLot(lot.id, bidComponent.bidderSlot);
+                    economyComponent.settleRound(roundComponent.round, roundComponent.sellerSlot, bidComponent.bidderSlot, bidComponent.highestBid);
+                    if (roundComponent.sellerSlot < 3)
                         beginRound(roundComponent.round + 1, now);
+                    else
+                        beginNight(now);
                     break;
+                case AuctionState.Phase.Night:
+                    finishNightTurn(now);
+                    return;
             }
             publishState();
         }
 
-        public void abortMatch(string reason) //진행 중 오류나 이탈을 전체 참가자에게 알림
+        private void beginNight(double now) //네 판매가 끝나면 집과 무작위 행동 순서 준비
+        {
+            nightComponent.beginNight();
+            beginNightTurn(now);
+        }
+
+        private void beginNightTurn(double now) //방어자는 집 안에서 움직이고 침입자만 외출 허용
+        {
+            for (int slot = 0; slot < 4; slot++) //모든 캐릭터의 안전한 집 위치
+                if (pawns[slot] != null)
+                    pawns[slot].resetPlayer(viewComponent.getHouse(slot).spawnPosition);
+            roundComponent.enterPhase(AuctionState.Phase.Night, now);
+            notice = "밤에는 모두 같은 실루엣입니다. 침입자는 물건 하나를 자기 집까지 운반하세요.";
+        }
+
+        private void finishNightTurn(double now) //운반 실패를 복구한 뒤 다음 행동 또는 회차 시작
+        {
+            int active = nightComponent.activeSlot; //종료할 침입자
+            inventoryComponent.finishCarry(active, false);
+            if (active >= 0 && pawns[active] != null)
+                pawns[active].carriedId = 0;
+            if (nightComponent.nextTurn())
+                beginNightTurn(now);
+            else if (roundComponent.round + 1 >= roundComponent.cycles * 4)
+            {
+                roundComponent.enterPhase(AuctionState.Phase.Results, now);
+                notice = "집들이 경매 종료! 개인 목표 달성 점수가 가장 높은 사람이 승리합니다. 동점은 공동 우승입니다.";
+            }
+            else
+                beginRound(roundComponent.round + 1, now);
+            publishState();
+        }
+
+        public void abortMatch(string reason) //중단 시 운반품 복구와 입력 차단
         {
             if (!networkComponent.isHost)
                 return;
+            for (int slot = 0; slot < 4; slot++) //운반 중인 상품 복구
+            {
+                inventoryComponent.finishCarry(slot, false);
+                if (pawns[slot] != null)
+                    pawns[slot].carriedId = 0;
+            }
             roundComponent.enterPhase(AuctionState.Phase.Aborted, 0);
             notice = reason;
             publishState();
+        }
+
+        public void registerPlayer(Player player) //Fusion이 생성한 캐릭터 등록
+        {
+            if (player.slot >= 0 && player.slot < 4)
+                pawns[player.slot] = player;
+        }
+
+        public void unregisterPlayer(Player player) //소멸한 캐릭터의 참조 해제
+        {
+            if (player.slot >= 0 && player.slot < 4 && pawns[player.slot] == player)
+                pawns[player.slot] = null;
+        }
+
+        public PlayerInput readPlayerInput() //설정창과 입력창에서는 월드 입력 정지
+        {
+            return localPlayer != null ? localPlayer.readInput(localState?.phase != AuctionState.Phase.Night || uiComponent.worldInputBlocked) : default;
+        }
+
+        public void simulatePlayer(Player player, Vector2 direction, bool interact, bool lockDoor, bool attack) //호스트가 이동과 밤 행동을 순서대로 위임
+        {
+            if (!networkComponent.isHost || roundComponent.phase != AuctionState.Phase.Night || player.health <= 0)
+                return;
+            int slot = player.slot; //권한으로 등록한 캐릭터 좌석
+            if (slot < 0 || slot >= 4 || pawns[slot] != player)
+                return;
+            double now = Time.realtimeSinceStartupAsDouble; //판정할 호스트 시각
+            if (nightComponent.simulatePlayer(player, direction, interact, lockDoor, attack, now))
+                finishNightTurn(now);
         }
 
         private int findSlot(int playerId) //실제 접속 식별자로 좌석 찾기
@@ -520,35 +602,42 @@ namespace CantResell
             networkComponent.sendState(players[slot].id, createState(slot, reason));
         }
 
-        private AuctionState createState(int slot, string message) //공개 정보와 수신자의 비밀 정보만 복사
+        private AuctionState createState(int slot, string message) //개인 목표와 상품 비밀을 수신자별로 가린 상태
         {
-            bool hasItem = roundComponent.phase >= AuctionState.Phase.Pitch && roundComponent.phase <= AuctionState.Phase.Results; //공개 대상 상품 존재 여부
-            bool revealed = roundComponent.phase == AuctionState.Phase.Reveal || roundComponent.phase == AuctionState.Phase.Results; //상품 전체 공개 여부
-            bool knows = hasItem && itemComponent.knowsCondition(slot, roundComponent.round, revealed); //수신자의 상품 열람 권한
-            AuctionState state = new AuctionState //호스트 내부 상태와 분리한 전송용 복사본
+            bool night = roundComponent.phase == AuctionState.Phase.Night; //닉네임과 스킨을 숨길 단계
+            bool result = roundComponent.phase == AuctionState.Phase.Results; //목표와 순위를 공개할 단계
+            bool playing = roundComponent.phase != AuctionState.Phase.Lobby && roundComponent.phase != AuctionState.Phase.Loading; //목표가 배정된 게임
+            AuctionState.Item[] items = inventoryComponent.createSnapshot(slot); //권한을 적용한 상품 복사본
+            AuctionState state = new AuctionState
             {
-                sequence = stateSequence, match = match, phase = roundComponent.phase, round = roundComponent.round,
-                localSlot = slot, hostSlot = findSlot(networkComponent.localId), sellerSlot = hasItem ? roundComponent.round : -1,
-                bidderSlot = bidComponent.bidderSlot, highestBid = bidComponent.highestBid,
-                minimumRaise = bidComponent.raiseAmount, normalReward = economyComponent.reward,
-                secondsRemaining = roundComponent.getRemaining(Time.realtimeSinceStartupAsDouble),
-                knowsCondition = knows, goodCondition = knows && itemComponent.getCondition(),
-                inspected = hasItem && itemComponent.hasInspected(slot), inspectionTickets = itemComponent.getTickets(slot), notice = message
+                sequence = stateSequence, match = match, phase = roundComponent.phase, round = roundComponent.round, cycles = roundComponent.cycles,
+                localSlot = slot, hostSlot = findSlot(networkComponent.localId), sellerSlot = roundComponent.sellerSlot,
+                bidderSlot = bidComponent.bidderSlot, highestBid = bidComponent.highestBid, minimumRaise = bidComponent.raiseAmount,
+                secondsRemaining = roundComponent.getRemaining(Time.realtimeSinceStartupAsDouble), phaseDuration = roundComponent.duration,
+                lotId = roundComponent.round + 1, nightTurn = night ? nightComponent.turn : -1,
+                activeIntruder = night ? nightComponent.activeSlot : -1, nightOrder = (int[])nightComponent.order.Clone(),
+                goalTitle = playing ? objectiveComponent.getGoal(slot).title : "", goalDescription = playing ? objectiveComponent.describeGoal(slot) : "",
+                goalScore = playing ? objectiveComponent.calculateScore(slot, items.Where(item => item.known)) : 0,
+                unknownItems = items.Count(item => item.owner == slot && item.status == AuctionState.ItemStatus.Stored && !item.known),
+                notice = message, items = items
             };
-            for (int index = 0; index < players.Length; index++) //복사할 공개 참가자 정보
+            for (int index = 0; index < players.Length; index++) //공개 참가자 복사
                 if (players[index] != null)
                     state.players[index] = new AuctionState.Player
                     {
-                        id = players[index].id, name = players[index].name, color = players[index].color,
-                        ready = players[index].ready, cash = economyComponent.getBalance(index)
+                        id = players[index].id, name = night ? (index == slot ? "나" : "익명의 이웃") : players[index].name,
+                        color = night ? 0 : players[index].color, ready = players[index].ready, cash = economyComponent.getBalance(index),
+                        score = result ? objectiveComponent.calculateScore(index, inventoryComponent.allItems) : -1,
+                        objective = result ? objectiveComponent.getGoal(index).title : ""
                     };
+            nightComponent.copyDoorsTo(state);
             return state;
         }
 
         public void receiveState(AuctionState state) //이전 순번을 버리고 로컬 화면 갱신
         {
-            if (state == null || state.version != 1 || state.sequence <= lastStateSequence || state.players == null ||
-                state.players.Length != 4 || state.localSlot < 0 || state.localSlot >= 4)
+            if (state == null || state.version != 2 || state.sequence <= lastStateSequence || state.players == null ||
+                state.items == null || state.items.Length > 32 || state.doorOpen?.Length != 4 || state.doorStrength?.Length != 4 || state.players.Length != 4 || state.localSlot < 0 || state.localSlot >= 4)
                 return;
             for (int slot = 0; slot < state.players.Length; slot++) //Unity JSON의 빈 클래스 표현을 빈 좌석으로 복원
                 if (state.players[slot] != null && state.players[slot].id == 0)

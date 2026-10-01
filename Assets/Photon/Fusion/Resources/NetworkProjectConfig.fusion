@@ -97,7 +97,8 @@
     "AssembliesToWeave": [
         "Assembly-CSharp",
         "Assembly-CSharp-firstpass",
-        "PhotonVoice.Fusion"
+        "PhotonVoice.Fusion",
+        "CantResell.Runtime"
     ],
     "UseSerializableDictionary": true,
     "NullChecksForNetworkedProperties": true,

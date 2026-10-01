@@ -65,6 +65,7 @@ namespace CantResell.Editor
                 }
             }
             configureVoicePrefabs();
+            configureGameplayPrefab(surface);
             prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
             foreach (string name in new[] { "Home", "StandBy", "Play" }) //연결할 게임 씬 이름
             {
@@ -182,6 +183,82 @@ namespace CantResell.Editor
                 SerializedObject uiData = new SerializedObject(contents.GetComponent<AuctionUIComponent>()); //공간에 맞는 따뜻한 패널 색상
                 uiData.FindProperty("panelColor").colorValue = new Color(0.07f, 0.047f, 0.031f, 0.94f);
                 uiData.ApplyModifiedPropertiesWithoutUndo();
+                PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(contents); }
+        }
+
+        private static void configureGameplayPrefab(Material surface) //새 게임 구성 요소와 실제 캐릭터 프리팹 연결
+        {
+            const string playerPath = "Assets/3. Prefabs/Player.prefab"; //실제 네트워크 캐릭터
+            GameObject pawn = AssetDatabase.LoadAssetAtPath<GameObject>(playerPath) == null ? new GameObject("Player") : PrefabUtility.LoadPrefabContents(playerPath); //기존 캐릭터 설정 보존
+            bool existing = AssetDatabase.LoadAssetAtPath<GameObject>(playerPath) != null; //기존 프리팹 로드 여부
+            try
+            {
+                if (pawn.GetComponent<NetworkObject>() == null)
+                {
+                    pawn.AddComponent<NetworkObject>();
+                    CharacterController controller = pawn.AddComponent<CharacterController>(); //실제 벽과 문 충돌
+                    controller.height = 1.8f;
+                    controller.radius = 0.32f;
+                    controller.center = new Vector3(0, 0.9f, 0);
+                    controller.stepOffset = 0.2f;
+                    NetworkCharacterController movement = pawn.AddComponent<NetworkCharacterController>(); //Fusion 위치 보간
+                    movement.maxSpeed = 4.5f;
+                    movement.acceleration = 30;
+                    movement.braking = 40;
+                    Player player = pawn.AddComponent<Player>(); //입력과 이동 및 방어 파사드
+                    GameObject body = GameObject.CreatePrimitive(PrimitiveType.Capsule); //낮의 스킨과 밤의 동일한 실루엣
+                    body.name = "Body";
+                    body.transform.SetParent(pawn.transform, false);
+                    body.transform.localPosition = Vector3.up * 0.9f;
+                    body.transform.localScale = new Vector3(0.65f, 0.9f, 0.65f);
+                    UnityEngine.Object.DestroyImmediate(body.GetComponent<Collider>());
+                    body.GetComponent<Renderer>().sharedMaterial = surface;
+                    GameObject carried = GameObject.CreatePrimitive(PrimitiveType.Cube); //운반품 표시
+                    carried.name = "CarriedItem";
+                    carried.transform.SetParent(pawn.transform, false);
+                    carried.transform.localPosition = new Vector3(0, 1, 0.65f);
+                    carried.transform.localScale = Vector3.one * 0.35f;
+                    UnityEngine.Object.DestroyImmediate(carried.GetComponent<Collider>());
+                    carried.GetComponent<Renderer>().sharedMaterial = surface;
+                    carried.SetActive(false);
+                    SerializedObject data = new SerializedObject(player); //캐릭터 외형 참조 연결
+                    data.FindProperty("body").objectReferenceValue = body.GetComponent<Renderer>();
+                    data.FindProperty("carriedVisual").objectReferenceValue = carried;
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
+                PrefabUtility.SaveAsPrefabAsset(pawn, playerPath);
+            }
+            finally
+            {
+                if (existing) PrefabUtility.UnloadPrefabContents(pawn);
+                else UnityEngine.Object.DestroyImmediate(pawn);
+            }
+            AssetDatabase.ImportAsset(playerPath, ImportAssetOptions.ForceUpdate);
+            Fusion.Editor.NetworkProjectConfigUtilities.RebuildPrefabTable();
+            GameObject contents = PrefabUtility.LoadPrefabContents(prefabPath); //이미 연결된 로비와 설정 유지
+            try
+            {
+                AuctionInventoryComponent inventory = contents.GetComponent<AuctionInventoryComponent>() ?? contents.AddComponent<AuctionInventoryComponent>(); //보유품
+                AuctionObjectiveComponent objective = contents.GetComponent<AuctionObjectiveComponent>() ?? contents.AddComponent<AuctionObjectiveComponent>(); //개인 목표
+                AuctionNightComponent night = contents.GetComponent<AuctionNightComponent>() ?? contents.AddComponent<AuctionNightComponent>(); //밤 순서
+                SerializedObject game = new SerializedObject(contents.GetComponent<AuctionGame>()); //파사드 참조
+                game.FindProperty("inventoryComponent").objectReferenceValue = inventory;
+                game.FindProperty("objectiveComponent").objectReferenceValue = objective;
+                game.FindProperty("nightComponent").objectReferenceValue = night;
+                game.ApplyModifiedPropertiesWithoutUndo();
+                SerializedObject network = new SerializedObject(contents.GetComponent<AuctionNetworkComponent>()); //생성할 Fusion 캐릭터
+                network.FindProperty("playerPrefab").objectReferenceValue = AssetDatabase.LoadAssetAtPath<GameObject>(playerPath).GetComponent<NetworkObject>();
+                network.ApplyModifiedPropertiesWithoutUndo();
+                SerializedObject economy = new SerializedObject(contents.GetComponent<AuctionEconomyComponent>()); //목표 상품 경매의 초기 자금
+                if (economy.FindProperty("startingCash").intValue == 100)
+                    economy.FindProperty("startingCash").intValue = 300;
+                economy.ApplyModifiedPropertiesWithoutUndo();
+                SerializedObject itemData = new SerializedObject(contents.GetComponent<AuctionItemComponent>()); //기존 토스터 확률을 새 상품 기본값으로 전환
+                if (Mathf.Approximately(itemData.FindProperty("normalChance").floatValue, 0.5f))
+                    itemData.FindProperty("normalChance").floatValue = 0.65f;
+                itemData.ApplyModifiedPropertiesWithoutUndo();
                 PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
             }
             finally { PrefabUtility.UnloadPrefabContents(contents); }
