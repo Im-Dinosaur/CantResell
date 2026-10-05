@@ -52,13 +52,13 @@ namespace CantResell
             if (body == null || state == null)
                 return;
             Color[] colors = { new Color(1, 0.36f, 0.33f), new Color(0.24f, 0.83f, 0.70f), new Color(1, 0.77f, 0.25f), new Color(0.64f, 0.45f, 0.96f) }; //낮의 스킨 색상
-            bool night = state.phase == AuctionState.Phase.Night; //정체를 숨길 단계
+            bool night = state.store == null && state.phase == AuctionState.Phase.Night; //이전 경쟁 모드에서만 정체 숨김
             Color color = night ? new Color(0.12f, 0.13f, 0.16f) : colors[Mathf.Clamp(state.players[slot]?.color ?? 0, 0, 3)]; //공통 밤 색상
             colorBlock.SetColor("_BaseColor", color);
             colorBlock.SetColor("_Color", color);
             body.SetPropertyBlock(colorBlock);
             if (carriedVisual != null)
-                carriedVisual.SetActive(carriedId > 0);
+                carriedVisual.SetActive(carriedId > 0 && state.store == null);
         }
 
         public PlayerInput readInput(bool blocked) //입력 담당 구성 요소를 호출하는 진입점

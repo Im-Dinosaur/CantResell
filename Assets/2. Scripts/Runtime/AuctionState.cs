@@ -5,8 +5,8 @@ namespace CantResell
     [Serializable]
     public sealed class AuctionState
     {
-        public enum Phase { Lobby, Loading, Pitch, Bidding, Night, Results, Aborted }
-        public enum Action { Profile, Ready, Start, Loaded, Bid, ReturnToLobby, EndNightTurn }
+        public enum Phase { Lobby, Loading, Pitch, Bidding, Night, Results, Aborted, Day }
+        public enum Action { Profile, Ready, Start, Loaded, Bid, ReturnToLobby, EndNightTurn, Gamble, Play }
         public enum ItemKind { CoffeeMachine, Table, Lamp, Turntable, Speaker, Tools, Workbench, Cabinet, Bed, Heater, Lock, Hammer, Crowbar }
         public enum ItemStatus { Stock, Stored, Carried, Retired }
 
@@ -38,18 +38,20 @@ namespace CantResell
         [Serializable]
         public sealed class Command
         {
-            public int version = 2; //메시지 규격 버전
+            public int version = 3; //메시지 규격 버전
             public long sequence; //중복 요청 방지 순번
             public Action action; //요청 행동
             public int match; //게임 번호
             public int round; //판매 순번
             public int nightTurn = -1; //지연된 밤 행동을 막을 턴 번호
+            public Phase phase; //지연된 낮밤 활동을 막을 요청 단계
             public string name; //변경할 이름
             public int value; //입찰액 또는 색상
             public bool ready; //준비 상태
         }
 
-        public int version = 2; //메시지 규격 버전
+        public int version = 3; //메시지 규격 버전
+        public FurnitureState store; //공동 가구점의 공유 상태
         public long sequence; //상태 갱신 순번
         public int match; //게임 번호
         public Phase phase; //현재 단계

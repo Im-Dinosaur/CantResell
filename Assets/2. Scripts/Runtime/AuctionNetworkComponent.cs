@@ -142,7 +142,7 @@ namespace CantResell
                     PlayerCount = 4,
                     IsVisible = true,
                     IsOpen = true,
-                    SessionProperties = host ? new Dictionary<string, SessionProperty> { { "v", 4 }, { "t", title }, { "p", locked ? 1 : 0 } } : null,
+                    SessionProperties = host ? new Dictionary<string, SessionProperty> { { "v", 5 }, { "t", title }, { "p", locked ? 1 : 0 } } : null,
                     ConnectionToken = admissionToken,
                     EnableClientSessionCreation = false,
                     Scene = sceneInfo,
@@ -275,7 +275,7 @@ namespace CantResell
 
         private ReliableKey nextKey() //중복되지 않는 데이터 스트림 키 생성
         {
-            return ReliableKey.FromInts(protocolKey, 2, unchecked(++transferSequence), 0);
+            return ReliableKey.FromInts(protocolKey, 3, unchecked(++transferSequence), 0);
         }
 
         private int findScene(string sceneName) //씬 이름으로 빌드 인덱스 확인
@@ -291,7 +291,7 @@ namespace CantResell
             if (source != runner || !isConnected || data.Length == 0 || data.Length > 32768)
                 return;
             key.GetInts(out int tag, out int version, out _, out _); //스트림의 프로토콜 식별 정보
-            if (tag != protocolKey || version != 2)
+            if (tag != protocolKey || version != 3)
                 return;
             try
             {
@@ -397,7 +397,7 @@ namespace CantResell
             List<Room> rooms = new List<Room>(); //이번 목록의 표시 항목
             foreach (SessionInfo session in sessions) //Photon에서 전달한 전체 방 목록
             {
-                if (!session.Properties.TryGetValue("v", out SessionProperty version) || !version.IsInt || (int)version != 4 ||
+                if (!session.Properties.TryGetValue("v", out SessionProperty version) || !version.IsInt || (int)version != 5 ||
                     !session.Properties.TryGetValue("t", out SessionProperty title) || !title.IsString ||
                     !session.Properties.TryGetValue("p", out SessionProperty password) || !password.IsInt)
                     continue;

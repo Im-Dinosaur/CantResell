@@ -281,6 +281,15 @@ GameObject:
   - component: {fileID: 3219488458410728951}
   - component: {fileID: 5804519938857160001}
   - component: {fileID: 3815472888115400236}
+  - component: {fileID: 3461219639326941229}
+  - component: {fileID: 91858440067903520}
+  - component: {fileID: 5540676791936975062}
+  - component: {fileID: 978503231808305507}
+  - component: {fileID: 2921460345562761283}
+  - component: {fileID: 373775440036872559}
+  - component: {fileID: 4122792858261612471}
+  - component: {fileID: 3256294067508944963}
+  - component: {fileID: 3130523224798072399}
   m_Layer: 0
   m_Name: AuctionGame
   m_TagString: Untagged
@@ -489,6 +498,7 @@ MonoBehaviour:
   inventoryComponent: {fileID: 3219488458410728951}
   objectiveComponent: {fileID: 5804519938857160001}
   nightComponent: {fileID: 3815472888115400236}
+  storeComponent: {fileID: 3461219639326941229}
 --- !u!114 &6430905118178082002
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -582,3 +592,137 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d049c0bf897da334290188e78136a7d6, type: 3}
   m_Name:
   m_EditorClassIdentifier: CantResell.Runtime::CantResell.AuctionNightComponent
+--- !u!114 &3461219639326941229
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7bcc430eb04c3f9498d1f51f0fe9e624, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureStore
+  roundComponent: {fileID: 91858440067903520}
+  economyComponent: {fileID: 5540676791936975062}
+  inventoryComponent: {fileID: 978503231808305507}
+  shopComponent: {fileID: 2921460345562761283}
+  nightComponent: {fileID: 373775440036872559}
+  leisureComponent: {fileID: 4122792858261612471}
+  worldComponent: {fileID: 3256294067508944963}
+  uiComponent: {fileID: 3130523224798072399}
+--- !u!114 &91858440067903520
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f760ea94b725e5d4fb3f8308539a67dd, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureRoundComponent
+  tradingDays: 4
+  daySeconds: 180
+  nightSeconds: 180
+--- !u!114 &5540676791936975062
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6e9c68488a58e54458bc892d1db8db08, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureEconomyComponent
+  startingCash: 300
+  goalCash: 1000
+  fineRatio: 0.25
+  winChance: 0.5
+  gambleSeconds: 2
+--- !u!114 &978503231808305507
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e5e1bb87c6413f94bbf1a898aec3c62e, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureInventoryComponent
+  startingStock: 6
+  furniturePerHouse: 8
+--- !u!114 &2921460345562761283
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7c64933db67dccf4183d1588d2f848b8, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureShopComponent
+  patienceSeconds: 40
+  arrivalSeconds: 4
+--- !u!114 &373775440036872559
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 33c086cb6fce09c4ea52758de67aea6a, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureNightComponent
+  policeArrivalSeconds: 20
+  policeSpeed: 4.8
+  captureDistance: 0.85
+  sensorPeriod: 6
+  disableSeconds: 10
+--- !u!114 &4122792858261612471
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4072cbda36da393448aa4c6176af10f7, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureLeisureComponent
+  cycleSeconds: 2
+--- !u!114 &3256294067508944963
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e4e636b5b4922014c90cb076b6671fec, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureWorldComponent
+--- !u!114 &3130523224798072399
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3927019814137392450}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d8503253c541a5b44b95211bd0e26247, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: CantResell.Runtime::CantResell.FurnitureUIComponent

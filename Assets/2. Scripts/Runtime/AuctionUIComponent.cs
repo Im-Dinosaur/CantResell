@@ -132,7 +132,10 @@ namespace CantResell
                 createText(page, "반품 불가!", 52, 28, 430, 62, 42, accentColor);
                 createButtonAt(page, "설정", 1210, 34, 145, 48, showSettings, false);
                 createButtonAt(page, "방 나가기", 1370, 34, 175, 48, game.leaveRoom, false);
-                buildPlay();
+                if (game.store != null)
+                    game.store.buildUI(page, font, accentColor);
+                else
+                    buildPlay();
                 buildVoiceControls(false);
             }
         }
@@ -145,7 +148,7 @@ namespace CantResell
             createText(panel, "NO RETURNS", 28, 27, 295, 32, 19, accentColor);
             Text title = createText(panel, "반품\n불가!", 25, 73, 300, 210, 82, new Color(1, 0.34f, 0.23f)); //붉은 간판 느낌의 제목
             title.lineSpacing = 0.93f;
-            createText(panel, "믿고 사셨다고요?", 30, 280, 292, 45, 23);
+            createText(panel, "낮에는 장사, 밤에는 도둑질!", 30, 280, 292, 45, 19);
             createText(panel, "플레이어 이름", 30, 354, 290, 32, 17);
             nicknameInput = createInput(panel, PlayerPrefs.GetString("CantResell.Name", "플레이어"), 30, 393, 290, false);
             nicknameInput.name = "Nickname";

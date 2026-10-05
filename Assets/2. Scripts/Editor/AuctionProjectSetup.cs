@@ -66,6 +66,7 @@ namespace CantResell.Editor
             }
             configureVoicePrefabs();
             configureGameplayPrefab(surface);
+            configureFurniturePrefab();
             prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
             foreach (string name in new[] { "Home", "StandBy", "Play" }) //연결할 게임 씬 이름
             {
@@ -259,6 +260,30 @@ namespace CantResell.Editor
                 if (Mathf.Approximately(itemData.FindProperty("normalChance").floatValue, 0.5f))
                     itemData.FindProperty("normalChance").floatValue = 0.65f;
                 itemData.ApplyModifiedPropertiesWithoutUndo();
+                PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(contents); }
+        }
+
+        private static void configureFurniturePrefab() //공동 가게 파사드와 담당 구성 요소를 기존 세션에 연결
+        {
+            GameObject contents = PrefabUtility.LoadPrefabContents(prefabPath); //기존 프리팹 참조 보존
+            try
+            {
+                FurnitureStore store = contents.GetComponent<FurnitureStore>() ?? contents.AddComponent<FurnitureStore>(); //공동 게임의 진입점
+                SerializedObject data = new SerializedObject(store); //담당 구성 요소 연결 정보
+                data.FindProperty("roundComponent").objectReferenceValue = contents.GetComponent<FurnitureRoundComponent>() ?? contents.AddComponent<FurnitureRoundComponent>();
+                data.FindProperty("economyComponent").objectReferenceValue = contents.GetComponent<FurnitureEconomyComponent>() ?? contents.AddComponent<FurnitureEconomyComponent>();
+                data.FindProperty("inventoryComponent").objectReferenceValue = contents.GetComponent<FurnitureInventoryComponent>() ?? contents.AddComponent<FurnitureInventoryComponent>();
+                data.FindProperty("shopComponent").objectReferenceValue = contents.GetComponent<FurnitureShopComponent>() ?? contents.AddComponent<FurnitureShopComponent>();
+                data.FindProperty("nightComponent").objectReferenceValue = contents.GetComponent<FurnitureNightComponent>() ?? contents.AddComponent<FurnitureNightComponent>();
+                data.FindProperty("leisureComponent").objectReferenceValue = contents.GetComponent<FurnitureLeisureComponent>() ?? contents.AddComponent<FurnitureLeisureComponent>();
+                data.FindProperty("worldComponent").objectReferenceValue = contents.GetComponent<FurnitureWorldComponent>() ?? contents.AddComponent<FurnitureWorldComponent>();
+                data.FindProperty("uiComponent").objectReferenceValue = contents.GetComponent<FurnitureUIComponent>() ?? contents.AddComponent<FurnitureUIComponent>();
+                data.ApplyModifiedPropertiesWithoutUndo();
+                SerializedObject game = new SerializedObject(contents.GetComponent<AuctionGame>()); //기존 방 진입점에서 게임 파사드 호출
+                game.FindProperty("storeComponent").objectReferenceValue = store;
+                game.ApplyModifiedPropertiesWithoutUndo();
                 PrefabUtility.SaveAsPrefabAsset(contents, prefabPath);
             }
             finally { PrefabUtility.UnloadPrefabContents(contents); }

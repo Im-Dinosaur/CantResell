@@ -233,75 +233,63 @@ namespace CantResell.Tests
         }
 
         [Test]
-        public void realSnapshotHidesOtherGoalsAndNightIdentity() //실제 전송 생성 경로에서 목표와 밤 정체 보호
+        public void realSnapshotSharesMoneyAndKeepsTeammateNames() //실제 전송 경로의 공금과 동료 식별 확인
         {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CantResell.Editor.AuctionProjectSetup.prefabPath); //실제 게임 프리팹
             GameObject testGame = Object.Instantiate(prefab); //전송 검증 대상
             try
             {
-                AuctionGame game = testGame.GetComponent<AuctionGame>(); //게임 진입점
+                AuctionGame game = testGame.GetComponent<AuctionGame>(); //세션 진입점
                 AuctionState.Player[] participants = (AuctionState.Player[])typeof(AuctionGame).GetField("players", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(game); //호스트 참가자
-                for (int slot = 0; slot < 4; slot++)
-                    participants[slot] = new AuctionState.Player { id = slot + 1, name = "비밀닉네임" + slot, color = slot };
-                testGame.GetComponent<AuctionInventoryComponent>().addStock(new AuctionState.Item { id = 1, owner = 0, cost = 73, condition = 100 });
-                testGame.GetComponent<AuctionRoundComponent>().beginRound(0, 0);
+                for (int slot = 0; slot < 4; slot++) //네 참가자 등록
+                    participants[slot] = new AuctionState.Player { id = slot + 1, name = "동료" + slot, color = slot };
+                FurnitureStore store = testGame.GetComponent<FurnitureStore>(); //공동 게임 파사드
+                store.initialize(new Player[4], () => { }, slot => "동료" + slot);
+                store.beginMatch(100);
+                store.tick(280, 0);
                 MethodInfo createState = typeof(AuctionGame).GetMethod("createState", BindingFlags.Instance | BindingFlags.NonPublic); //실제 전송 복사
-                AuctionState buyer = (AuctionState)createState.Invoke(game, new object[] { 1, "" }); //아직 낙찰하지 않은 구매자
-                Assert.IsFalse(buyer.items[0].known);
-                Assert.AreEqual(0, buyer.items[0].cost);
-                Assert.IsTrue(buyer.players.All(value => value.score == -1 && value.objective == ""));
-                testGame.GetComponent<AuctionRoundComponent>().enterPhase(AuctionState.Phase.Night, 0);
-                AuctionState night = JsonUtility.FromJson<AuctionState>(JsonUtility.ToJson(createState.Invoke(game, new object[] { 1, "" }))); //네트워크의 밤 복사본
-                Assert.IsTrue(night.players.All(value => !value.name.Contains("비밀닉네임") && value.color == 0));
-                testGame.GetComponent<AuctionRoundComponent>().enterPhase(AuctionState.Phase.Results, 0);
-                AuctionState result = (AuctionState)createState.Invoke(game, new object[] { 1, "" });
-                Assert.IsTrue(result.players.All(value => value.score >= 0 && !string.IsNullOrEmpty(value.objective)));
-                Assert.IsFalse(result.items[0].known);
+                AuctionState night = JsonUtility.FromJson<AuctionState>(JsonUtility.ToJson(createState.Invoke(game, new object[] { 1, "" }))); //JSON 전송 경계
+                Assert.AreEqual(AuctionState.Phase.Night, night.phase);
+                Assert.AreEqual(300, night.store.cash);
+                Assert.IsTrue(night.players.All(value => value.name.StartsWith("동료") && string.IsNullOrEmpty(value.objective)));
+                Assert.Greater(night.store.furniture.Length, 6);
+                night.store.furniture[0].price = 0;
+                Assert.Greater(store.snapshot(280).furniture[0].price, 0);
             }
             finally { Object.DestroyImmediate(testGame); }
         }
-
 
         [Test]
-        public void completeThreeCyclesThroughTheRealCoordinator() //실제 파사드의 열두 거래와 세 번의 밤 및 결과 전환
+        public void completeFourDaysAndThreeRaidsThroughTheRealCoordinator() //마지막 밤의 가구를 팔 수 있는 최종 영업 확인
         {
-            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CantResell.Editor.AuctionProjectSetup.prefabPath); //실제 게임 구성
-            GameObject testGame = Object.Instantiate(prefab); //호스트 진행 검증 대상
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CantResell.Editor.AuctionProjectSetup.prefabPath); //실제 연결 구성
+            GameObject testGame = Object.Instantiate(prefab); //진행 검증 대상
             try
             {
-                AuctionGame game = testGame.GetComponent<AuctionGame>(); //단계 조율 파사드
-                AuctionRoundComponent round = testGame.GetComponent<AuctionRoundComponent>(); //현재 단계
-                AuctionEconomyComponent economy = testGame.GetComponent<AuctionEconomyComponent>(); //실제 거래
-                economy.resetMatch();
-                testGame.GetComponent<AuctionItemComponent>().resetMatch();
-                MethodInfo begin = typeof(AuctionGame).GetMethod("beginRound", BindingFlags.Instance | BindingFlags.NonPublic); //판매 시작
-                MethodInfo advance = typeof(AuctionGame).GetMethod("advancePhase", BindingFlags.Instance | BindingFlags.NonPublic); //시간 만료 처리
-                begin.Invoke(game, new object[] { 0, 100d });
-                double now = 100; //단계 전환 검증 시각
-                for (int cycle = 0; cycle < 3; cycle++) //승인한 다회차 진행
+                FurnitureStore store = testGame.GetComponent<FurnitureStore>(); //담당 구성 요소를 조율할 파사드
+                store.initialize(new Player[4], () => { }, slot => "동료" + slot);
+                store.beginMatch(100);
+                double now = 100; //호스트 검증 시각
+                for (int day = 1; day <= 4; day++) //네 번의 영업과 세 번의 침입
                 {
-                    for (int seller = 0; seller < 4; seller++) //모든 참가자의 판매 턴
+                    Assert.AreEqual(day, store.rounds.day);
+                    Assert.AreEqual(AuctionState.Phase.Day, store.rounds.phase);
+                    store.tick(now += 180, 0);
+                    if (day < 4)
                     {
-                        Assert.AreEqual(cycle * 4 + seller, round.round);
-                        Assert.AreEqual(AuctionState.Phase.Pitch, round.phase);
-                        advance.Invoke(game, new object[] { now += 20 });
-                        Assert.AreEqual(AuctionState.Phase.Bidding, round.phase);
-                        int buyer = (seller + 1) % 4; //판매자 이외의 낙찰자
-                        Assert.IsTrue(testGame.GetComponent<AuctionBidComponent>().tryBid(buyer, seller, economy.getBalance(buyer), 10));
-                        advance.Invoke(game, new object[] { now += 25 });
+                        Assert.AreEqual(AuctionState.Phase.Night, store.rounds.phase);
+                        store.tick(now += 180, 0);
                     }
-                    Assert.AreEqual(AuctionState.Phase.Night, round.phase);
-                    Assert.AreEqual(4, testGame.GetComponent<AuctionNightComponent>().order.Distinct().Count());
-                    for (int turn = 0; turn < 4; turn++) //모든 밤 행동 완료
-                        advance.Invoke(game, new object[] { now += 45 });
                 }
-                Assert.AreEqual(AuctionState.Phase.Results, round.phase);
-                Assert.AreEqual(12, testGame.GetComponent<AuctionInventoryComponent>().allItems.Count());
-                Assert.AreEqual(1200, Enumerable.Range(0, 4).Sum(economy.getBalance));
+                Assert.AreEqual(AuctionState.Phase.Results, store.rounds.phase);
+                Assert.AreEqual(300, store.snapshot(now).cash);
+                Assert.IsFalse(store.snapshot(now).success);
+                store.resetMatch();
+                Assert.AreEqual(AuctionState.Phase.Lobby, store.rounds.phase);
+                Assert.IsFalse(store.running);
             }
             finally { Object.DestroyImmediate(testGame); }
         }
-
         [TestCase("Home")]
         [TestCase("StandBy")]
         [TestCase("Play")]
@@ -314,7 +302,7 @@ namespace CantResell.Tests
                 AuctionGame[] facades = scene.GetRootGameObjects().SelectMany(value => value.GetComponentsInChildren<AuctionGame>()).ToArray(); //씬에 연결된 진입점 목록
                 Assert.AreEqual(1, facades.Length);
                 SerializedObject settings = new SerializedObject(facades[0]); //저장된 구성 요소 참조
-                foreach (string field in new[] { "roundComponent", "itemComponent", "bidComponent", "economyComponent", "networkComponent", "uiComponent", "viewComponent", "voiceComponent", "settingsComponent", "audioComponent", "inventoryComponent", "objectiveComponent", "nightComponent" }) //필수 연결 필드
+                foreach (string field in new[] { "roundComponent", "itemComponent", "bidComponent", "economyComponent", "networkComponent", "uiComponent", "viewComponent", "voiceComponent", "settingsComponent", "audioComponent", "inventoryComponent", "objectiveComponent", "nightComponent", "storeComponent" }) //필수 연결 필드
                     Assert.IsNotNull(settings.FindProperty(field).objectReferenceValue, field);
                 Assert.AreEqual(1, scene.GetRootGameObjects().SelectMany(value => value.GetComponentsInChildren<Camera>()).Count());
             }

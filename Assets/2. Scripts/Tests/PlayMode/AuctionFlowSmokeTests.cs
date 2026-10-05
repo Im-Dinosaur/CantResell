@@ -144,70 +144,57 @@ namespace CantResell.PlayTests
             Assert.AreSame(game, Object.FindAnyObjectByType<AuctionGame>());
             Assert.IsFalse(game.GetComponentsInChildren<Slider>().Any());
             Assert.AreEqual(1, Object.FindObjectsByType<AuctionGame>(FindObjectsSortMode.None).Length);
-            state = createState(2, AuctionState.Phase.Pitch);
+            state = createState(2, AuctionState.Phase.Day);
             game.receiveState(state);
-            Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("원가·상태: 알 수 없음")));
+            yield return null;
+            Assert.IsNotNull(GameObject.Find("FurnitureStoreWorld"));
+            Assert.AreEqual(0, Object.FindObjectsByType<PlayerHouse>(FindObjectsSortMode.None).Length);
+            Assert.IsFalse(game.GetComponentsInChildren<Button>().Single(button => button.name == "베팅").interactable, "이동하지 않고 원격 도박을 할 수 없어야 합니다.");
             game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
             Assert.AreEqual(0, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_1").value);
             Assert.AreEqual(0.45f, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "Voice_3").value);
-            Assert.AreEqual(0.3f, game.GetComponentsInChildren<Slider>().Single(slider => slider.name == "MusicVolume").value);
             game.GetComponentsInChildren<Button>().Single(button => button.name == "닫기").onClick.Invoke();
             yield return null;
-            Assert.AreEqual(4, Object.FindObjectsByType<PlayerHouse>(FindObjectsSortMode.None).Length);
-            GameObject probe = new GameObject("CollisionProbe"); //플레이 공간의 실제 충돌 검증
-            CharacterController controller = probe.AddComponent<CharacterController>(); //플레이어와 같은 크기의 충돌
+            GameObject probe = new GameObject("CollisionProbe"); //새 가게 바닥과 외벽 검증
+            CharacterController controller = probe.AddComponent<CharacterController>(); //플레이어 크기의 충돌
             controller.height = 1.8f;
             controller.center = Vector3.up * 0.9f;
             controller.radius = 0.32f;
-            probe.transform.position = new Vector3(-8, 2, 9);
-            Assert.IsFalse(Physics.GetIgnoreLayerCollision(0, 0), "Unity 6.3에서 기본 레이어 충돌 행렬을 읽지 못했습니다.");
+            probe.transform.position = new Vector3(-16, 2, 1);
             Physics.SyncTransforms();
             controller.Move(Vector3.down * 3);
-            Assert.Greater(probe.transform.position.y, -0.1f, "캐릭터가 바닥을 통과했습니다.");
-            controller.Move(Vector3.right * 5);
-            Assert.Less(probe.transform.position.x, -5.2f, "캐릭터가 집 벽을 통과했습니다.");
+            Assert.Greater(probe.transform.position.y, -0.1f, "바닥을 통과했습니다.");
+            controller.Move(Vector3.left * 5);
+            Assert.Greater(probe.transform.position.x, -16.8f, "외벽을 통과했습니다.");
             Object.Destroy(probe);
-            state = createState(3, AuctionState.Phase.Bidding);
-            game.receiveState(state);
-            Assert.IsTrue(game.GetComponentsInChildren<Button>().Single(button => button.name == "입찰하기").interactable);
             captureScreen(game, "Logs/PrototypePreview/Play.png");
-            yield return null;
-
-            state = createState(4, AuctionState.Phase.Night);
-            state.activeIntruder = 1;
-            state.nightTurn = 0;
-            state.items[0].status = AuctionState.ItemStatus.Stored;
-            state.items[0].owner = 0;
-            foreach (AuctionState.Player player in state.players)
-            {
-                player.name = "익명의 이웃";
-                player.color = 0;
-            }
+            state = createState(3, AuctionState.Phase.Night);
+            state.store.alarm = FurnitureState.Alarm.Reporting;
+            state.store.policeSeconds = 20;
             game.receiveState(state);
             yield return null;
-            Assert.IsTrue(game.GetComponentsInChildren<Button>().Single(button => button.name == "이번 밤 행동 마치기").interactable);
-            Assert.IsFalse(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("플레이어 1")));
+            Assert.IsNotNull(GameObject.Find("NightHouse"));
+            Assert.IsNotNull(GameObject.Find("Door"));
+            Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("집주인 신고")));
+            Assert.IsFalse(game.GetComponentsInChildren<Button>().Any(button => button.name == "이번 밤 행동 마치기"));
             game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
-            Assert.IsFalse(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("플레이어 1")));
+            Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("플레이어 1")), "밤에도 동료 이름을 표시해야 합니다.");
             game.GetComponentsInChildren<Button>().Single(button => button.name == "닫기").onClick.Invoke();
-            Assert.IsNotNull(GameObject.Find("StoredItem_1"));
             captureScreen(game, "Logs/PrototypePreview/Night.png");
-            yield return null;
-            state = createState(5, AuctionState.Phase.Results);
-
-            state.players[0].score = state.players[1].score = 80;
+            state = createState(4, AuctionState.Phase.Results);
+            state.store.cash = 1200;
+            state.store.success = true;
             game.receiveState(state);
-            Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("1위  플레이어 1") && label.text.Contains("1위  플레이어 2")));
-            captureScreen(game, "Logs/PrototypePreview/Results.png");
             yield return null;
+            Assert.IsTrue(game.GetComponentsInChildren<Text>().Any(label => label.text.Contains("공동 가게 운영 성공")));
+            captureScreen(game, "Logs/PrototypePreview/Results.png");
             game.GetComponentsInChildren<Button>().Single(button => button.name == "설정").onClick.Invoke();
-            state = createState(6, AuctionState.Phase.Results);
+            state = createState(5, AuctionState.Phase.Results);
             state.players[3] = null;
             game.receiveState(state);
             Assert.AreEqual(5, game.GetComponentsInChildren<Slider>().Length);
             Assert.IsFalse(game.GetComponentsInChildren<Slider>().Any(slider => slider.name == "Voice_4"));
-            yield return null;
-        }
+            yield return null;        }
 
         private void captureScreen(AuctionGame game, string path) //숨겨진 검증 창에서도 UI와 3D 화면을 이미지로 저장
         {
@@ -265,6 +252,20 @@ namespace CantResell.PlayTests
             };
             for (int slot = 0; slot < 4; slot++) //테스트 화면의 참가자 생성 번호
                 state.players[slot] = new AuctionState.Player { id = slot + 1, name = "플레이어 " + (slot + 1), color = slot, cash = 300, ready = true, score = 30, objective = "홈 카페" };
+            if (phase != AuctionState.Phase.Lobby)
+                state.store = new FurnitureState
+                {
+                    day = 1, days = 4, cash = 300, targetCash = 1000, orderKind = 0, orderSeconds = 40,
+                    sensorActive = true, escaped = new bool[4], playScores = new int[4],
+                    ledger = new[] { "공동 가게 시작: 300 코인" }, outcome = "가게를 운영하며 필요한 돈을 모으세요.",
+                    ownerPosition = new Vector3(5.8f, 0, 14), policePosition = new Vector3(0, 0, -9),
+                    furniture = Enumerable.Range(0, 6).Select(index => new FurnitureState.Furniture
+                    {
+                        id = index + 1, kind = index, price = new[] { 25, 35, 50, 60, 80, 100 }[index],
+                        location = phase == AuctionState.Phase.Night ? FurnitureState.Location.House : FurnitureState.Location.Shop,
+                        position = phase == AuctionState.Phase.Night ? FurnitureInventoryComponent.housePosition(index) : FurnitureInventoryComponent.shopPosition(index)
+                    }).ToArray()
+                };
             return state;
         }
 

@@ -26,6 +26,7 @@ namespace CantResell
         public void showScene(string sceneName) //기본 3D 방과 임시 상품 구성
         {
             clearRoom();
+            AuctionGame.current?.store?.world.clear();
             currentScene = sceneName;
             roomRoot = new GameObject("AuctionRoomView");
             Scene targetScene = SceneManager.GetSceneByName(sceneName); //전환 중 활성 씬과 구분할 표시 대상 씬
@@ -54,6 +55,11 @@ namespace CantResell
             if (sceneName != "Play")
             {
                 buildLounge(sceneName == "StandBy");
+                return;
+            }
+            if (AuctionGame.current?.store != null)
+            {
+                AuctionGame.current.store.world.build(targetScene, camera, surfaceMaterial);
                 return;
             }
             createShape("Floor", PrimitiveType.Cube, new Vector3(0, -0.15f, 0), new Vector3(38, 0.3f, 36), new Color(0.12f, 0.15f, 0.18f), true);
@@ -194,6 +200,8 @@ namespace CantResell
                 return;
             if (daylight != null)
                 daylight.intensity = state.phase == AuctionState.Phase.Night ? daylightIntensity * 0.28f : daylightIntensity;
+            if (AuctionGame.current?.store != null)
+                return;
             for (int slot = 0; slot < houses.Length; slot++) //문 개방에 따른 충돌 갱신
                 houses[slot].showDoor(state.doorOpen[slot], state.doorStrength[slot]);
             foreach (GameObject visual in loot.Values) //없어진 보관품 숨기기
@@ -226,6 +234,8 @@ namespace CantResell
 
         private void LateUpdate() //밤에는 자신의 캐릭터를 따라가는 카메라
         {
+            if (AuctionGame.current?.store != null)
+                return;
             if (currentScene != "Play" || sceneCamera == null)
                 return;
             foreach (GameObject item in loot.Values)

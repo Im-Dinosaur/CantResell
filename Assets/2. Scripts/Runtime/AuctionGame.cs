@@ -21,12 +21,15 @@ namespace CantResell
         [SerializeField] private AuctionInventoryComponent inventoryComponent; //상품 소유권과 비밀 담당
         [SerializeField] private AuctionObjectiveComponent objectiveComponent; //개인 목표와 점수 담당
         [SerializeField] private AuctionNightComponent nightComponent; //밤 행동 순서와 침입·방어 담당
+        [SerializeField] private FurnitureStore storeComponent; //공동 가구점 게임 진입점
         private readonly Player[] pawns = new Player[4]; //실제 이동하는 네 캐릭터
         public static AuctionGame current => instance; //네트워크 캐릭터가 사용하는 진입점
         public AuctionState displayStateValue => localState; //로컬 화면과 캐릭터에 허용된 상태
         public AuctionItemComponent.Definition[] catalog => itemComponent.catalog; //공개 상품 도감
         public Player localPlayer => localState?.localSlot >= 0 ? pawns[localState.localSlot] : null; //본인의 이동 캐릭터
         public AuctionVoiceComponent voice => voiceComponent; //UI에 제공할 음성 상태
+        public FurnitureStore store => storeComponent; //새 Play 화면과 게임 연결
+        private AuctionState.Phase currentPhase => storeComponent != null && storeComponent.running ? storeComponent.rounds.phase : roundComponent.phase; //현재 활성 게임의 단계
         public float masterVolume => settingsComponent.masterVolume; //설정창의 전체 음량
         public float musicVolume => settingsComponent.musicVolume; //설정창의 음악 음량
         public float effectsVolume => settingsComponent.effectsVolume; //설정창의 효과음 음량
@@ -82,6 +85,8 @@ namespace CantResell
             audioComponent.applyVolumes(masterVolume, musicVolume, effectsVolume);
             audioComponent.initialize();
             nightComponent.initialize(inventoryComponent, viewComponent, pawns, publishState);
+            if (storeComponent != null)
+                storeComponent.initialize(pawns, publishState, slot => players[slot]?.name ?? "플레이어");
             networkComponent.initialize(this);
             uiComponent.initialize(this);
             SceneManager.sceneLoaded += onSceneLoaded;
@@ -131,12 +136,14 @@ namespace CantResell
             double now = Time.realtimeSinceStartupAsDouble; //시간 배율에 영향을 받지 않는 현재 시각
             if (networkComponent.isHost)
             {
-                if (roundComponent.hasExpired(now))
+                if (storeComponent != null && storeComponent.running)
+                    storeComponent.tick(now, Time.deltaTime);
+                else if (roundComponent.hasExpired(now))
                     advancePhase(now);
                 if (now >= nextSnapshotTime)
                 {
                     publishState();
-                    nextSnapshotTime = now + 1;
+                    nextSnapshotTime = now + (storeComponent != null && storeComponent.running ? 0.2 : 1);
                 }
             }
             if (now >= nextPresenceTime)
@@ -215,6 +222,7 @@ namespace CantResell
             roundComponent.resetLobby();
             economyComponent.resetMatch();
             notice = "4명이 모여 준비하면 시작할 수 있습니다.";
+            storeComponent?.resetMatch();
             uiComponent.setBusy(true);
             uiComponent.showMessage(host ? "방을 만들고 있습니다…" : "방에 참가하고 있습니다…");
             string error = await networkComponent.connect(host, room.code, room.title, room.locked, password); //Photon 접속 결과
@@ -334,6 +342,21 @@ namespace CantResell
             sendAction(AuctionState.Action.Bid, amount);
         }
 
+        public void requestStoreGamble(int amount) //공금 도박 요청
+        {
+            sendAction(AuctionState.Action.Gamble, amount);
+        }
+
+        public void requestStorePlay() //무료 놀이 요청
+        {
+            sendAction(AuctionState.Action.Play);
+        }
+
+        public Player getPlayer(int slot) //공동 월드에서 동료 캐릭터 조회
+        {
+            return slot >= 0 && slot < pawns.Length ? pawns[slot] : null;
+        }
+
         public void requestLobby() //게임 종료 후 방장의 대기실 복귀 요청
         {
             sendAction(AuctionState.Action.ReturnToLobby);
@@ -344,7 +367,8 @@ namespace CantResell
             networkComponent.sendCommand(new AuctionState.Command
             {
                 sequence = ++commandSequence, action = action, value = value, ready = ready,
-                name = nickname, match = localState?.match ?? match, round = localState?.round ?? 0, nightTurn = localState?.nightTurn ?? -1
+                name = nickname, match = localState?.match ?? match, round = localState?.round ?? 0, nightTurn = localState?.nightTurn ?? -1,
+                phase = localState?.phase ?? currentPhase
             });
         }
 
@@ -380,15 +404,18 @@ namespace CantResell
         {
             int slot = findSlot(playerId); //네트워크 송신자로 확인한 좌석
             double now = Time.realtimeSinceStartupAsDouble; //요청을 받은 호스트 시각
-            if (!networkComponent.isHost || command == null || command.version != 2 || slot < 0 ||
+            if (!networkComponent.isHost || command == null || command.version != 3 || slot < 0 ||
                 command.sequence <= receivedCommands[slot] || now - commandTimes[slot] < 0.075)
                 return;
             receivedCommands[slot] = command.sequence;
             commandTimes[slot] = now;
-            if (roundComponent.hasExpired(now))
+            if (storeComponent != null && storeComponent.running)
+                storeComponent.tick(now, 0);
+            else if (roundComponent.hasExpired(now))
                 advancePhase(now);
-            bool lobby = roundComponent.phase == AuctionState.Phase.Lobby; //대기실 단계 여부
-            bool sameRound = command.match == match && command.round == roundComponent.round; //지연 요청의 게임과 라운드 검증
+            bool lobby = currentPhase == AuctionState.Phase.Lobby; //대기실 단계 여부
+            int activeRound = storeComponent != null && storeComponent.running ? storeComponent.rounds.day - 1 : roundComponent.round; //활성 게임의 날짜 또는 판매 순번
+            bool sameRound = command.match == match && command.round == activeRound; //지연 요청의 게임과 라운드 검증
             switch (command.action)
             {
                 case AuctionState.Action.Profile when lobby:
@@ -412,6 +439,7 @@ namespace CantResell
                     nightComponent.resetMatch();
                     economyComponent.resetMatch();
                     bidComponent.resetBids();
+                    storeComponent?.resetMatch();
                     roundComponent.enterPhase(AuctionState.Phase.Loading, now);
                     notice = "모든 참가자가 게임 씬에 입장하기를 기다립니다.";
                     networkComponent.setRoomOpen(false);
@@ -423,7 +451,14 @@ namespace CantResell
                     if (loaded.All(value => value))
                     {
                         networkComponent.spawnPlayers(players);
-                        beginRound(0, now);
+                        if (storeComponent != null)
+                        {
+                            storeComponent.beginMatch(now);
+                            roundComponent.enterPhase(AuctionState.Phase.Day, now);
+                            notice = "공동 가구점 영업 시작! 모두 같은 공금을 사용합니다.";
+                        }
+                        else
+                            beginRound(0, now);
                     }
                     break;
 
@@ -439,14 +474,25 @@ namespace CantResell
                     slot == nightComponent.activeSlot && command.nightTurn == nightComponent.turn:
                     finishNightTurn(now);
                     return;
+                case AuctionState.Action.Gamble:
+                case AuctionState.Action.Play:
+                    if (storeComponent == null || !sameRound || command.phase != currentPhase ||
+                        !storeComponent.command(slot, command.action, command.value, now, out string activityMessage))
+                    {
+                        reject(slot, "낮에 해당 기계 가까이에서 공금과 금액을 확인하세요.");
+                        return;
+                    }
+                    notice = activityMessage;
+                    break;
                 case AuctionState.Action.ReturnToLobby when playerId == networkComponent.localId &&
-                    (roundComponent.phase == AuctionState.Phase.Results || roundComponent.phase == AuctionState.Phase.Aborted):
+                    (currentPhase == AuctionState.Phase.Results || currentPhase == AuctionState.Phase.Aborted):
                     networkComponent.clearPlayers();
                     inventoryComponent.resetMatch();
                     nightComponent.resetMatch();
                     roundComponent.resetLobby();
                     economyComponent.resetMatch();
                     bidComponent.resetBids();
+                    storeComponent?.resetMatch();
                     foreach (AuctionState.Player player in players) //남은 참가자의 준비 상태 초기화
                         if (player != null)
                             player.ready = false;
@@ -543,6 +589,7 @@ namespace CantResell
         {
             if (!networkComponent.isHost)
                 return;
+            storeComponent?.abort();
             for (int slot = 0; slot < 4; slot++) //운반 중인 상품 복구
             {
                 inventoryComponent.finishCarry(slot, false);
@@ -568,17 +615,25 @@ namespace CantResell
 
         public PlayerInput readPlayerInput() //설정창과 입력창에서는 월드 입력 정지
         {
-            return localPlayer != null ? localPlayer.readInput(localState?.phase != AuctionState.Phase.Night || uiComponent.worldInputBlocked) : default;
+            bool moving = localState?.phase == AuctionState.Phase.Night || (storeComponent != null && localState?.phase == AuctionState.Phase.Day); //월드 활동 가능 여부
+            return localPlayer != null ? localPlayer.readInput(!moving || uiComponent.worldInputBlocked || (storeComponent != null && storeComponent.inputBlocked)) : default;
         }
 
         public void simulatePlayer(Player player, Vector2 direction, bool interact, bool lockDoor, bool attack) //호스트가 이동과 밤 행동을 순서대로 위임
         {
-            if (!networkComponent.isHost || roundComponent.phase != AuctionState.Phase.Night || player.health <= 0)
+            if (!networkComponent.isHost || player.health <= 0)
                 return;
             int slot = player.slot; //권한으로 등록한 캐릭터 좌석
             if (slot < 0 || slot >= 4 || pawns[slot] != player)
                 return;
             double now = Time.realtimeSinceStartupAsDouble; //판정할 호스트 시각
+            if (storeComponent != null)
+            {
+                storeComponent.simulatePlayer(player, direction, interact, lockDoor, now);
+                return;
+            }
+            if (roundComponent.phase != AuctionState.Phase.Night)
+                return;
             if (nightComponent.simulatePlayer(player, direction, interact, lockDoor, attack, now))
                 finishNightTurn(now);
         }
@@ -604,6 +659,8 @@ namespace CantResell
 
         private AuctionState createState(int slot, string message) //개인 목표와 상품 비밀을 수신자별로 가린 상태
         {
+            if (storeComponent != null)
+                return createStoreState(slot, message);
             bool night = roundComponent.phase == AuctionState.Phase.Night; //닉네임과 스킨을 숨길 단계
             bool result = roundComponent.phase == AuctionState.Phase.Results; //목표와 순위를 공개할 단계
             bool playing = roundComponent.phase != AuctionState.Phase.Lobby && roundComponent.phase != AuctionState.Phase.Loading; //목표가 배정된 게임
@@ -636,8 +693,12 @@ namespace CantResell
 
         public void receiveState(AuctionState state) //이전 순번을 버리고 로컬 화면 갱신
         {
-            if (state == null || state.version != 2 || state.sequence <= lastStateSequence || state.players == null ||
+            if (state == null || state.version != 3 || state.sequence <= lastStateSequence || state.players == null ||
                 state.items == null || state.items.Length > 32 || state.doorOpen?.Length != 4 || state.doorStrength?.Length != 4 || state.players.Length != 4 || state.localSlot < 0 || state.localSlot >= 4)
+                return;
+            if (state.store != null && (state.store.furniture == null || state.store.furniture.Length > 128 ||
+                state.store.escaped?.Length != 4 || state.store.playScores?.Length != 4 || state.store.ledger == null ||
+                state.store.furniture.Any(item => item == null || item.kind < 0 || item.kind >= FurnitureInventoryComponent.names.Length || item.carrier < -1 || item.carrier > 3)))
                 return;
             for (int slot = 0; slot < state.players.Length; slot++) //Unity JSON의 빈 클래스 표현을 빈 좌석으로 복원
                 if (state.players[slot] != null && state.players[slot].id == 0)
@@ -654,6 +715,26 @@ namespace CantResell
             voiceComponent.updateParticipants(localState);
             uiComponent.showState(localState, networkComponent.roomTitle + "  ·  " + networkComponent.roomName);
             viewComponent.showState(localState);
+            if (localState.store != null)
+                storeComponent?.showState(localState);
+        }
+
+        private AuctionState createStoreState(int slot, string message) //비공개 목표 없는 공동 가구점 상태 전송
+        {
+            double now = Time.realtimeSinceStartupAsDouble; //스냅샷의 호스트 시각
+            bool playing = storeComponent.running; //공동 게임 진행 여부
+            AuctionState state = new AuctionState
+            {
+                sequence = stateSequence, match = match, phase = currentPhase, localSlot = slot, hostSlot = findSlot(networkComponent.localId),
+                round = playing ? storeComponent.rounds.day - 1 : 0, cycles = storeComponent.rounds.days,
+                secondsRemaining = playing ? storeComponent.rounds.remaining(now) : roundComponent.getRemaining(now),
+                phaseDuration = playing ? storeComponent.rounds.duration : roundComponent.duration,
+                notice = message, store = storeComponent.snapshot(now)
+            };
+            for (int index = 0; index < players.Length; index++) //공동 협력 중 동료 식별 정보
+                if (players[index] != null)
+                    state.players[index] = new AuctionState.Player { id = players[index].id, name = players[index].name, color = players[index].color, ready = players[index].ready };
+            return state;
         }
 
         public void leaveRoom() //사용자의 방 나가기 요청
@@ -674,6 +755,7 @@ namespace CantResell
                 localState = null;
                 lastStateSequence = -1;
                 roundComponent.resetLobby();
+                storeComponent?.resetMatch();
                 AsyncOperation load = SceneManager.LoadSceneAsync("Home"); //Home 복귀 작업
                 while (load != null && !load.isDone)
                     await System.Threading.Tasks.Task.Yield();
